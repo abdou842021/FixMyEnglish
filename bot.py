@@ -1850,39 +1850,49 @@ def build_application():
 # =========================================================
 
 def main():
+    print("=== FixMyEnglish START ===", flush=True)
 
     if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN is missing."
-        )
+        raise RuntimeError("BOT_TOKEN is missing.")
 
     if not GROQ_API_KEY:
-        raise RuntimeError(
-            "GROQ_API_KEY is missing."
-        )
+        raise RuntimeError("GROQ_API_KEY is missing.")
 
-    print(
-        "Starting FixMyEnglish..."
-    )
+    print("BOT_TOKEN found:", bool(BOT_TOKEN), flush=True)
+    print("GROQ_API_KEY found:", bool(GROQ_API_KEY), flush=True)
+
+    print("Starting Flask...", flush=True)
 
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
     )
-
     flask_thread.start()
 
-    application = build_application()
+    print("Flask thread started.", flush=True)
+    print("Building Telegram application...", flush=True)
 
-    print(
-        "FixMyEnglish is running..."
-    )
+    try:
+        application = build_application()
+        print("Telegram application built successfully.", flush=True)
+    except Exception as e:
+        print("BUILD APPLICATION ERROR:", repr(e), flush=True)
+        raise
 
-    application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-    )
+    print("Starting Telegram polling...", flush=True)
 
+    try:
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    except Exception as e:
+        print("POLLING ERROR:", repr(e), flush=True)
+        raise
+
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
