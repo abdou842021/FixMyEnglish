@@ -909,6 +909,29 @@ DUAS = [
 # =========================================================
 # NAME DETECTION
 # =========================================================
+NAME_PATTERNS = [
+    r"عبد\s*الكريم",
+    r"عبد\s+الكريم\s+حمدوش",
+    r"abdelkrim",
+    r"abd\s*el\s*krim",
+    r"abd\s*elkrim",
+    r"abdelkrim\s+hamdouche",
+    r"abd\s+el\s+krim\s+hamdouche",
+    r"abdou",
+    r"\bkarim\b",
+]
+
+def name_is_mentioned(text):
+    if not text:
+        return False
+
+    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+
+    for pattern in NAME_PATTERNS:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            return True
+
+    return False
 
 async def name_reaction(update, context):
 
