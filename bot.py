@@ -487,21 +487,84 @@ Word:
 # TEXT TO SPEECH
 # =========================================================
 async def send_pronunciation(update, word, dialect):
+# =========================================================
+# TEXT TO SPEECH
+# =========================================================
+
+async def make_audio(text, voice):
+
+    filename = None
+
+    try:
+        # Create temporary MP3 file
+        fd, filename = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+
+        # Generate speech
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+        )
+
+        await communicate.save(filename)
+
+        # Make sure the file exists and is not empty
+        if not os.path.exists(filename):
+            print("TTS error: audio file was not created.")
+            return None
+
+        if os.path.getsize(filename) == 0:
+            print("TTS error: audio file is empty.")
+
+            try:
+                os.remove(filename)
+            except Exception:
+                pass
+
+            return None
+
+        return filename
+
+    except Exception as e:
+
+        print(
+            "TTS error:",
+            repr(e),
+            flush=True,
+        )
+
+        if filename:
+            try:
+                os.remove(filename)
+            except Exception:
+                pass
+
+        return None
+
+
+async def send_pronunciation(update, word, dialect):
 
     message = update.effective_message
 
     if not message:
         return
 
+    word = (word or "").strip()
+
+    if not word:
+        return
+
     # Count words
     word_count = len(word.split())
 
-    # Maximum length: 700 words
+    # Maximum: 700 words
     if word_count > 700:
+
         await message.reply_text(
             "❌ The text is too long for pronunciation.\n"
             "The maximum is 700 words."
         )
+
         return
 
     # Select voice
@@ -512,48 +575,96 @@ async def send_pronunciation(update, word, dialect):
         voice = UK_VOICE
 
     else:
+        # /pr = use American voice for audio
         voice = US_VOICE
 
-    # 1–4 words:
-    # Send phonetics + audio
+    # =====================================================
+    # 1–4 WORDS
+    # Phonetics + audio
+    # =====================================================
+
     if word_count <= 4:
 
         if dialect == "US":
-            info = pronunciation_info(word, "US")
+
+            info = pronunciation_info(
+                word,
+                "US",
+            )
 
         elif dialect == "UK":
-            info = pronunciation_info(word, "UK")
+
+            info = pronunciation_info(
+                word,
+                "UK",
+            )
 
         else:
-            info = both_pronunciation(word)
 
-        await message.reply_text(info)
+            info = both_pronunciation(
+                word,
+            )
 
-    # 5–700 words:
-    # Audio only, no phonetics
+        await message.reply_text(
+            info,
+        )
 
-    audio = await make_audio(word, voice)
+    # =====================================================
+    # AUDIO
+    # 1–700 WORDS
+    # =====================================================
 
-    if audio:
+    audio = await make_audio(
+        word,
+        voice,
+    )
 
-        try:
-            with open(audio, "rb") as f:
-                await message.reply_voice(
-                    voice=f,
-                    caption="🔊 Pronunciation",
-                )
+    if not audio:
 
-        finally:
-            try:
-                os.remove(audio)
-            except Exception:
-                pass
-
-    else:
         await message.reply_text(
             "❌ I couldn't create the pronunciation audio."
         )
 
+        return
+
+    try:
+
+        # IMPORTANT:
+        # edge-tts creates MP3.
+        # Therefore use reply_audio, NOT reply_voice.
+
+        with open(audio, "rb") as f:
+
+            await message.reply_audio(
+                audio=f,
+                caption="🔊 Pronunciation",
+            )
+
+    except Exception as e:
+
+        print(
+            "Telegram audio error:",
+            repr(e),
+            flush=True,
+        )
+
+        await message.reply_text(
+            "❌ I couldn't send the pronunciation audio."
+        )
+
+    finally:
+
+        try:
+            if os.path.exists(audio):
+                os.remove(audio)
+
+        except Exception as e:
+
+            print(
+                "Audio cleanup error:",
+                repr(e),
+                flush=True,
+            )
 
 # =========================================================
 # DUAS
@@ -1891,5 +2002,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
-    main()
+
