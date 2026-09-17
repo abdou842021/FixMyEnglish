@@ -2,147 +2,926 @@ import os
 import json
 import re
 import random
-from threading import Thread
+import tempfile
+import threading
+import asyncio
+from pathlib import Path
 
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from groq import Groq
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReactionTypeEmoji,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    ChatMemberHandler,
     ContextTypes,
     filters,
 )
 
-
-# =========================================================
-# SETTINGS
-# =========================================================
-
-TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-PORT = int(os.getenv("PORT", "10000"))
-
-if not TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing")
+import edge_tts
 
 
 # =========================================================
-# FILES
+# CONFIG
 # =========================================================
 
-ALLOWED_USERS_FILE = "allowed_users.json"
-ALLOWED_GROUPS_FILE = "allowed_groups.json"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
-USERS_INFO_FILE = "users_info.json"
-GROUPS_INFO_FILE = "groups_info.json"
+try:
+    OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+except ValueError:
+    OWNER_ID = 0
 
-USER_ERRORS_FILE = "user_errors.json"
-CHAT_SETTINGS_FILE = "chat_settings.json"
+MODEL = "openai/gpt-oss-20b"
 
+US_VOICE = "en-US-AriaNeural"
+UK_VOICE = "en-GB-SoniaNeural"
 
-# =========================================================
-# FLASK - RENDER
-# =========================================================
+USERS_FILE = Path("users.json")
+PENDING_FILE = Path("pending_users.json")
 
 app = Flask(__name__)
 
-
-@app.route("/")
-def home():
-    return "FixMyEnglish is alive!"
-
-
-def run_web():
-    app.run(host="0.0.0.0", port=PORT)
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 # =========================================================
-# JSON HELPERS
+# JSON STORAGE
 # =========================================================
 
-def load_json(filename, default):
+def load_json(path, default):
     try:
-        if not os.path.exists(filename):
+        if not path.exists():
             return default
 
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    except Exception:
+        return data
+
+    except Exception as e:
+        print("Load JSON error:", repr(e))
         return default
 
 
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def save_json(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        print("Save JSON error:", repr(e))
 
 
-# =========================================================
-# DATA
-# =========================================================
+approved_users = load_json(USERS_FILE, [])
+pending_users = load_json(PENDING_FILE, [])
 
-allowed_users = load_json(ALLOWED_USERS_FILE, [])
-allowed_groups = load_json(ALLOWED_GROUPS_FILE, [])
+approved_users = [
+    int(x) for x in approved_users
+    if str(x).lstrip("-").isdigit()
+]
 
-users_info = load_json(USERS_INFO_FILE, {})
-groups_info = load_json(GROUPS_INFO_FILE, {})
-
-user_errors = load_json(USER_ERRORS_FILE, {})
-chat_settings = load_json(CHAT_SETTINGS_FILE, {})
+pending_users = [
+    int(x) for x in pending_users
+    if str(x).lstrip("-").isdigit()
+]
 
 
 # =========================================================
 # ACCESS
 # =========================================================
 
-def is_allowed(update: Update):
-    user = update.effective_user
-    chat = update.effective_chat
+def is_owner(user_id):
+    return OWNER_ID != 0 and user_id == OWNER_ID
 
-    if user and user.id == OWNER_ID:
-        return True
 
-    if chat.type == "private":
-        return user and user.id in allowed_users
+def is_approved(user_id):
+    return is_owner(user_id) or user_id in approved_users
 
-    return chat.id in allowed_groups
+
+def add_approved(user_id):
+    if user_id not in approved_users:
+        approved_users.append(user_id)
+        save_json(USERS_FILE, approved_users)
+
+
+def remove_approved(user_id):
+    if user_id in approved_users:
+        approved_users.remove(user_id)
+        save_json(USERS_FILE, approved_users)
+
+
+def add_pending(user_id):
+    if user_id not in pending_users:
+        pending_users.append(user_id)
+        save_json(PENDING_FILE, pending_users)
+
+
+def remove_pending(user_id):
+    if user_id in pending_users:
+        pending_users.remove(user_id)
+        save_json(PENDING_FILE, pending_users)
 
 
 # =========================================================
-# SAVE USER INFO
+# TEXT HELPERS
 # =========================================================
 
-def save_user_info(user):
-    if not user:
+def clean_text(text):
+    return (text or "").strip()
+
+
+def get_reply_text(message):
+    if not message or not message.reply_to_message:
+        return ""
+
+    replied = message.reply_to_message
+
+    if replied.text:
+        return replied.text.strip()
+
+    if replied.caption:
+        return replied.caption.strip()
+
+    return ""
+
+
+def get_arguments(message):
+    if not message or not message.text:
+        return ""
+
+    parts = message.text.strip().split(maxsplit=1)
+
+    if len(parts) == 2:
+        return parts[1].strip()
+
+    return ""
+
+
+def get_target_text(message):
+    reply = get_reply_text(message)
+
+    if reply:
+        return reply
+
+    return get_arguments(message)
+
+
+def is_short_input(text):
+    words = re.findall(r"[A-Za-z'-]+", text or "")
+    return len(words) <= 3 and len(text or "") <= 80
+
+
+def split_long_text(text, max_length=3900):
+    result = []
+
+    while len(text) > max_length:
+        cut = text.rfind("\n", 0, max_length)
+
+        if cut < 500:
+            cut = text.rfind(" ", 0, max_length)
+
+        if cut < 500:
+            cut = max_length
+
+        result.append(text[:cut])
+        text = text[cut:].lstrip()
+
+    if text:
+        result.append(text)
+
+    return result
+
+
+async def send_long_reply(update, text):
+    message = update.effective_message
+
+    if not message:
         return
 
-    users_info[str(user.id)] = {
-        "id": user.id,
-        "name": user.full_name or "Unknown",
-        "username": user.username or "No username",
-    }
-
-    save_json(USERS_INFO_FILE, users_info)
+    for part in split_long_text(text):
+        await message.reply_text(part)
 
 
 # =========================================================
-# SAVE GROUP INFO
+# GROQ
 # =========================================================
 
-def save_group_info(chat):
-    if not chat:
+def ask_groq(prompt, max_tokens=1200):
+
+    if not groq_client:
+        return "❌ GROQ_API_KEY is not configured."
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are FixMyEnglish, an accurate English-learning "
+                        "assistant for Arabic-speaking learners. "
+                        "Be clear, natural, concise, and educational. "
+                        "Use Arabic when explaining English to an Arabic speaker. "
+                        "Never reveal internal reasoning."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            temperature=0.3,
+            max_completion_tokens=max_tokens,
+            include_reasoning=False,
+        )
+
+        result = response.choices[0].message.content
+
+        if not result:
+            return "❌ Empty AI response."
+
+        return result.strip()
+
+    except Exception as e:
+        print("Groq error:", repr(e))
+        return "❌ AI request failed. Please try again."
+
+
+# =========================================================
+# LANGUAGE FUNCTIONS
+# =========================================================
+
+def translate_text(text):
+    return ask_groq(
+        f"""
+Translate this text.
+
+Rules:
+- English → natural Arabic.
+- Arabic → natural English.
+- Preserve the exact meaning.
+- Do not add unnecessary explanations.
+
+Text:
+{text}
+""",
+        1200,
+    )
+
+
+def correct_text(text):
+    return ask_groq(
+        f"""
+Correct this English text comprehensively.
+
+Check:
+- spelling
+- typing mistakes
+- word forms
+- grammar
+- punctuation
+- capitalization
+- word choice
+- context
+
+If a word is obviously mistyped, infer the intended word.
+
+Use exactly this format:
+
+✅ Correct:
+[corrected text]
+
+📝 Corrections:
+- [important corrections]
+
+🇩🇿 Arabic meaning:
+[meaning]
+
+Text:
+{text}
+""",
+        1600,
+    )
+
+
+def explain_text(text):
+    return ask_groq(
+        f"""
+Explain this English word or expression to an Arabic-speaking learner.
+
+Include:
+• Arabic meaning
+• Part of speech
+• Other common meanings
+• Common preposition or fixed phrase if useful
+• Two natural English examples
+• Arabic translation of each example
+
+Keep it concise.
+
+Word/expression:
+{text}
+""",
+        1400,
+    )
+
+
+def synonyms_text(text):
+    return ask_groq(
+        f"""
+For this English word/expression provide:
+
+🔹 Synonyms:
+5 useful synonyms
+
+🔻 Antonyms:
+5 genuine antonyms when possible
+
+🇩🇿 Arabic meaning:
+...
+
+Example:
+One natural English example + Arabic translation.
+
+Do not invent antonyms.
+
+Word:
+{text}
+""",
+        1200,
+    )
+
+
+def antonyms_text(text):
+    return ask_groq(
+        f"""
+Give useful antonyms for this English word.
+
+Format:
+
+🔹 Word: {text}
+
+🔻 Antonyms:
+- ...
+- ...
+- ...
+- ...
+- ...
+
+🇩🇿 Meaning:
+...
+
+Ex:
+English sentence
+Arabic translation
+
+Do not invent antonyms.
+""",
+        900,
+    )
+
+
+def use_word(text):
+    return ask_groq(
+        f"""
+Use this English word/expression naturally.
+
+If it has several common meanings, explain each important meaning
+and give an example for each.
+
+For every example:
+English sentence
+Arabic translation
+
+Word:
+{text}
+""",
+        1500,
+    )
+
+
+def free_ai(text):
+    return ask_groq(
+        f"""
+The user asks:
+
+{text}
+
+Answer the request directly and accurately.
+If it concerns English learning, make the explanation useful for an
+Arabic-speaking learner.
+""",
+        1800,
+    )
+
+
+def pronunciation_info(word, dialect):
+
+    if dialect == "US":
+        name = "American English"
+        flag = "🇺🇸"
+    else:
+        name = "British English"
+        flag = "🇬🇧"
+
+    return ask_groq(
+        f"""
+Give accurate pronunciation information for this English word
+in {name}.
+
+Return:
+
+Word: {word}
+{flag} IPA: [IPA]
+
+🇩🇿 Arabic meaning:
+...
+
+Other common meanings if applicable:
+...
+
+Only give pronunciation for this word.
+Use standard IPA.
+
+Word:
+{word}
+""",
+        700,
+    )
+
+
+def both_pronunciation(word):
+    return ask_groq(
+        f"""
+Give accurate pronunciation for this English word.
+
+Return exactly:
+
+{word}
+
+🇺🇸 [American IPA]
+🇬🇧 [British IPA]
+
+🇩🇿 Arabic meaning:
+...
+
+Only give IPA for the word.
+
+Word:
+{word}
+""",
+        700,
+    )
+
+
+# =========================================================
+# TEXT TO SPEECH
+# =========================================================
+
+async def make_audio(text, voice):
+
+    filename = None
+
+    try:
+        fd, filename = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(filename)
+
+        return filename
+
+    except Exception as e:
+        print("TTS error:", repr(e))
+
+        if filename:
+            try:
+                os.remove(filename)
+            except Exception:
+                pass
+
+        return None
+
+
+async def send_pronunciation(update, word, dialect):
+
+    message = update.effective_message
+
+    if not message:
         return
 
-    groups_info[str(chat.id)] = {
-        "id": chat.id,
-        "title": chat.title or "Unknown",
-        "type": chat.type,
-    }
+    if not is_short_input(word):
+        await message.reply_text(
+            "ℹ️ Pronunciation is intended for short words or expressions. "
+            "For longer text, use /tr, /cor, or /ai."
+        )
+        return
 
-    save_json(GROUPS_INFO_FILE, groups_info)
+    if dialect == "US":
+        info = pronunciation_info(word, "US")
+        voice = US_VOICE
+
+    elif dialect == "UK":
+        info = pronunciation_info(word, "UK")
+        voice = UK_VOICE
+
+    else:
+        info = both_pronunciation(word)
+        voice = US_VOICE
+
+    await message.reply_text(info)
+
+    audio = await make_audio(word, voice)
+
+    if audio:
+
+        try:
+            with open(audio, "rb") as f:
+                await message.reply_voice(
+                    voice=f,
+                    caption="🔊 Pronunciation",
+                )
+
+        finally:
+            try:
+                os.remove(audio)
+            except Exception:
+                pass
+
+
+# =========================================================
+# DUAS
+# =========================================================
+
+DUAS = [
+
+    "🤲 May Allah bless you with beneficial knowledge, wisdom, and success.",
+
+    "🤲 May Allah increase you in knowledge, understanding, and goodness.",
+
+    "🤲 May Allah open the doors of beneficial knowledge for you.",
+
+    "🤲 May Allah bless your time, your efforts, and everything you learn.",
+
+    "🤲 May Allah guide you to what is good and make your path easy.",
+
+    "🤲 May Allah grant you knowledge that benefits you and benefits others.",
+
+    "🤲 May Allah increase you in faith, knowledge, wisdom, and good character.",
+
+    "🤲 May Allah make your journey toward knowledge full of blessings and success.",
+
+    "🤲 May Allah make every difficulty easy for you and every good effort fruitful.",
+
+    "🤲 May Allah bless your mind with understanding and your heart with peace.",
+
+    "🤲 May Allah grant you clarity, patience, and success in all that is good.",
+
+    "🤲 May Allah make your knowledge a source of benefit in this life and the Hereafter.",
+
+    "🤲 May Allah bless you with sincere intentions and beneficial actions.",
+
+    "🤲 May Allah increase you in wisdom and guide you to the best choices.",
+
+    "🤲 May Allah make learning easy for you and put barakah in your efforts.",
+
+    "🤲 May Allah grant you success beyond what you expect and goodness beyond what you imagine.",
+
+    "🤲 May Allah protect you, guide you, and surround you with His mercy.",
+
+    "🤲 May Allah grant you a heart full of gratitude, patience, and peace.",
+
+    "🤲 May Allah bless every step you take toward knowledge and righteousness.",
+
+    "🤲 May Allah make your efforts sincere, your knowledge beneficial, and your path blessed.",
+
+    "🤲 May Allah open for you doors of understanding that you never expected.",
+
+    "🤲 May Allah grant you strength when learning is difficult and patience when progress is slow.",
+
+    "🤲 May Allah put light in your heart, clarity in your mind, and barakah in your time.",
+
+    "🤲 May Allah make you a source of benefit and goodness wherever you go.",
+
+    "🤲 May Allah grant you success in your studies and bless you with lasting knowledge.",
+
+    "🤲 May Allah make your pursuit of knowledge a means of drawing closer to Him.",
+
+    "🤲 May Allah reward your efforts, forgive your shortcomings, and increase you in goodness.",
+
+    "🤲 May Allah grant you beneficial knowledge, lawful provision, good health, and a peaceful heart.",
+
+    "🤲 May Allah guide you whenever you are uncertain and strengthen you whenever you struggle.",
+
+    "🤲 May Allah bless your future and make it better than you hope.",
+
+    "🤲 May Allah grant you excellence in what you learn and wisdom in how you use it.",
+
+    "🤲 May Allah make every page you read and every word you learn a source of benefit.",
+
+    "🤲 May Allah bless your memory, strengthen your understanding, and make learning easy for you.",
+
+    "🤲 May Allah grant you patience with yourself and consistency in seeking knowledge.",
+
+    "🤲 May Allah give you the ability to understand, remember, and apply beneficial knowledge.",
+
+    "🤲 May Allah make your knowledge a light for you and a benefit to those around you.",
+
+    "🤲 May Allah bless your dreams, guide your steps, and grant you what is best for you.",
+
+    "🤲 May Allah replace every difficulty with ease and every worry with peace.",
+
+    "🤲 May Allah grant you sincerity in your intentions and excellence in your actions.",
+
+    "🤲 May Allah keep you steadfast upon goodness and guide you to what pleases Him.",
+
+    "🤲 May Allah bless your journey, protect you from harm, and grant you a beautiful future.",
+
+    "🤲 May Allah grant you courage to continue, patience to persevere, and wisdom to learn.",
+
+    "🤲 May Allah make your efforts today a reason for greater blessings tomorrow.",
+
+    "🤲 May Allah grant you success in this world and lasting success in the Hereafter.",
+
+    "🤲 May Allah fill your life with beneficial knowledge, righteous deeds, and peaceful moments.",
+
+    "🤲 May Allah guide your heart, enlighten your mind, and bless your endeavors.",
+
+    "🤲 May Allah grant you the best of what you seek and protect you from what harms you.",
+
+    "🤲 May Allah make you among those who learn, understand, practice, and teach what is good.",
+
+    "🤲 May Allah bless you with good companions, beneficial knowledge, and a righteous path.",
+
+    "🤲 May Allah make your future bright with faith, knowledge, goodness, and success.",
+
+    "🤲 May Allah give you strength to overcome every obstacle and wisdom to learn from every experience.",
+
+    "🤲 May Allah grant you peace in your heart, clarity in your thoughts, and blessings in your life.",
+
+    "🤲 May Allah make every sincere effort you make a reason for reward and goodness.",
+
+    "🤲 May Allah grant you a beautiful character, beneficial knowledge, and a heart attached to goodness.",
+
+    "🤲 May Allah protect your heart from despair and fill it with hope, patience, and trust in Him.",
+
+    "🤲 May Allah bless you with opportunities that bring you closer to what is good.",
+
+    "🤲 May Allah make your learning journey enjoyable, beneficial, and full of barakah.",
+
+    "🤲 May Allah grant you understanding deeper than memorization and wisdom greater than information.",
+
+    "🤲 May Allah bless what you know, teach you what you do not know, and benefit you through both.",
+
+    "🤲 May Allah make your knowledge a means of helping yourself, your family, and your community.",
+
+    "🤲 May Allah grant you steadfastness when the road is difficult and gratitude when it becomes easy.",
+
+    "🤲 May Allah open your heart to knowledge and make you among those who act upon what they learn.",
+
+    "🤲 May Allah bless your days with purpose, your nights with peace, and your efforts with success.",
+
+    "🤲 May Allah grant you what is good for you, even when you do not know what is best for yourself.",
+
+    "🤲 May Allah guide you toward people and opportunities that bring goodness into your life.",
+
+    "🤲 May Allah make your knowledge increase your humility, your wisdom, and your kindness.",
+
+    "🤲 May Allah grant you success in every beneficial pursuit and protect you from wasted effort.",
+
+    "🤲 May Allah bless your path with knowledge, patience, sincerity, and beautiful results.",
+
+    "🤲 May Allah make you better with every day and closer to Him with every step.",
+
+    "🤲 May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
+
+    "🤲 May Allah give you the strength to keep learning even when progress seems slow.",
+
+    "🤲 May Allah reward your patience and make the fruits of your efforts greater than you expect.",
+
+    "🤲 May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
+
+    "🤲 May Allah put barakah in everything beneficial that you learn and teach.",
+
+    "🤲 May Allah make your words beneficial, your actions sincere, and your intentions pure.",
+
+    "🤲 May Allah protect you from harmful knowledge and guide you toward knowledge that brings benefit.",
+
+    "🤲 May Allah grant you success with humility and knowledge with wisdom.",
+
+    "🤲 May Allah make your journey of learning a journey of growth, goodness, and closeness to Him.",
+
+    "🤲 May Allah bless you with a peaceful heart and a mind eager to learn what is beneficial.",
+
+    "🤲 May Allah grant you opportunities to use your knowledge in ways that benefit others.",
+
+    "🤲 May Allah make your efforts a source of goodness for you in this life and the next.",
+
+    "🤲 May Allah grant you patience during hardship and gratitude during ease.",
+
+    "🤲 May Allah guide you to the best path and grant you the strength to remain upon it.",
+
+    "🤲 May Allah bless you with knowledge that changes your life for the better.",
+
+    "🤲 May Allah make your future filled with goodness, growth, peace, and success.",
+
+    "🤲 May Allah increase you in every kind of goodness and protect you from every kind of harm.",
+
+    "🤲 May Allah bless your heart with faith, your mind with understanding, and your life with barakah.",
+
+    "🤲 May Allah grant you success in your studies, your work, your relationships, and your worship.",
+
+    "🤲 May Allah make you a person whose knowledge benefits others long after you learn it.",
+
+    "🤲 May Allah accept your sincere efforts and multiply the goodness that comes from them.",
+
+    "🤲 May Allah grant you a clear mind, a strong heart, and the patience to keep moving forward.",
+
+    "🤲 May Allah make every beneficial thing you learn a lasting part of your character.",
+
+    "🤲 May Allah guide you toward what is best and keep you away from what would harm you.",
+
+    "🤲 May Allah grant you wisdom in speech, kindness in action, and sincerity in your heart.",
+
+    "🤲 May Allah make your pursuit of knowledge a source of light, benefit, and reward.",
+
+    "🤲 May Allah bless your efforts today and allow their goodness to continue into tomorrow.",
+
+    "🤲 May Allah grant you success without arrogance, knowledge without pride, and goodness without showing off.",
+
+    "🤲 May Allah make your heart strong, your intentions sincere, and your journey blessed.",
+
+    "🤲 May Allah grant you the patience to learn, the wisdom to understand, and the courage to apply what you learn.",
+
+    "🤲 May Allah fill your life with moments that increase you in faith, knowledge, gratitude, and peace.",
+
+    "🤲 May Allah grant you beneficial knowledge and make you a means through which others benefit.",
+
+    "🤲 May Allah bless your future with opportunities that bring you closer to goodness.",
+
+    "🤲 May Allah make every sincere step you take toward knowledge a step toward greater goodness.",
+
+    "🤲 May Allah grant you a heart that loves goodness and a mind that seeks beneficial knowledge.",
+
+    "🤲 May Allah protect you wherever you go and guide you wherever you turn.",
+
+    "🤲 May Allah grant you ease after hardship, hope after difficulty, and success after sincere effort.",
+
+    "🤲 May Allah bless your life with people who encourage you toward goodness and knowledge.",
+
+    "🤲 May Allah make you grateful for what you have, patient with what you lack, and hopeful for what is to come.",
+
+    "🤲 May Allah grant you strength, wisdom, and sincerity in every beneficial thing you pursue.",
+
+    "🤲 May Allah make your learning a source of confidence, humility, and positive change.",
+
+    "🤲 May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
+
+    "🤲 May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
+
+    "🤲 May Allah make your efforts meaningful, your progress steady, and your future blessed.",
+
+    "🤲 May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
+
+    "🤲 May Allah bless every good intention in your heart and every sincere effort you make.",
+
+    "🤲 May Allah make your knowledge a source of guidance, your character a source of goodness, and your life a source of benefit.",
+
+]
+
+
+# =========================================================
+# NAME DETECTION
+# =========================================================
+
+NAME_PATTERNS = [
+    r"عبد\s*الكريم",
+    r"عبد\s+الكريم\s+حمدوش",
+    r"abdelkrim",
+    r"abd\s*el\s*krim",
+    r"abd\s*elkrim",
+    r"abdelkrim\s+hamdouche",
+    r"abd\s+el\s+krim\s+hamdouche",
+    r"abdou",
+    r"\bkarim\b",
+]
+
+
+def name_is_mentioned(text):
+
+    if not text:
+        return False
+
+    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+
+    for pattern in NAME_PATTERNS:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            return True
+
+    return False
+
+
+async def name_reaction(update, context):
+
+    message = update.effective_message
+
+    if not message or not message.text:
+        return
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    if not name_is_mentioned(message.text):
+        return
+
+    try:
+        await context.bot.set_message_reaction(
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            reaction=[
+                ReactionTypeEmoji("❤️")
+            ],
+        )
+
+    except Exception as e:
+        print("Reaction error:", repr(e))
+
+    await message.reply_text(
+        random.choice(DUAS)
+    )
+
+
+# =========================================================
+# HELP
+# =========================================================
+
+HELP_TEXT = """
+📚 <b>FixMyEnglish — Commands</b>
+
+🌍 <b>Translation</b>
+/tr text
+ترجم text
+
+✍️ <b>Correction</b>
+/cor text
+صحح text
+
+📖 <b>Explanation</b>
+/ex word
+اشرح word
+
+🔄 <b>Synonyms</b>
+/syn word
+مرادف word
+
+🔻 <b>Antonyms</b>
+ضد word
+
+🧩 <b>Word Usage</b>
+/use word
+وظف word
+
+🇺🇸 <b>American</b>
+/us word
+امريكي word
+
+🇬🇧 <b>British</b>
+/uk word
+بريطاني word
+
+🗣️ <b>Both</b>
+/pr word
+انطق word
+
+🤖 <b>AI</b>
+/ai your request
+
+💬 <b>Reply mode</b>
+
+Reply to a message and send:
+
+/tr
+/cor
+/ex
+/syn
+/use
+/us
+/uk
+/pr
+
+The command will be applied to the message you replied to.
+
+🔇 Normal messages are ignored.
+"""
 
 
 # =========================================================
@@ -152,1013 +931,918 @@ def save_group_info(chat):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
-    chat = update.effective_chat
 
-    save_user_info(user)
+    if not user:
+        return
 
-    if user.id == OWNER_ID:
-        await update.message.reply_text(
-            "👑 Welcome, Owner!\n\n"
-            "FixMyEnglish is ready."
+    if not is_approved(user.id):
+
+        add_pending(user.id)
+
+        await update.effective_message.reply_text(
+            "👋 Welcome to FixMyEnglish!\n\n"
+            "🔐 Your access request has been sent to the owner.\n"
+            "Please wait for approval."
         )
+
+        await notify_owner(update, user)
+
         return
 
-    if chat.type != "private":
-        if chat.id in allowed_groups:
-            await update.message.reply_text(
-                "✅ FixMyEnglish is active in this group."
-            )
-        else:
-            await update.message.reply_text(
-                "⏳ This group is waiting for approval."
-            )
-        return
-
-    if user.id in allowed_users:
-        await update.message.reply_text(
-            "🎉 Your access has already been approved!\n\n"
-            "Welcome to FixMyEnglish 🤍\n\n"
-            "✏️ Correct English mistakes\n"
-            "📚 Learn from your mistakes\n"
-            "🧠 Improve your English step by step"
-        )
-        return
-
-    await update.message.reply_text(
-        "⏳ Your request is waiting for approval.\n\n"
-        "FixMyEnglish is an English-learning bot that will help you:\n"
-        "✏️ Correct English mistakes\n"
-        "📚 Learn from your mistakes\n"
-        "🧠 Improve your English step by step\n\n"
-        "Your request has been sent to the owner.\n"
-        "Please wait until your access is approved."
+    await update.effective_message.reply_text(
+        "👋 Welcome to <b>FixMyEnglish</b>!\n\n"
+        "🌍 Translation\n"
+        "✍️ English correction\n"
+        "📖 Word explanations\n"
+        "🔄 Synonyms & antonyms\n"
+        "🧩 Word usage\n"
+        "🇺🇸 American pronunciation\n"
+        "🇬🇧 British pronunciation\n"
+        "🔊 Pronunciation audio\n"
+        "🤖 AI assistant\n\n"
+        "📚 Send /help to see all commands.",
+        parse_mode="HTML",
     )
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "✅ Accept",
-                callback_data=f"accept_user:{user.id}"
-            ),
-            InlineKeyboardButton(
-                "❌ Reject",
-                callback_data=f"reject_user:{user.id}"
-            ),
-        ]
-    ])
 
-    await context.bot.send_message(
-        chat_id=OWNER_ID,
-        text=(
-            "👤 New user request\n\n"
-            f"Name: {user.full_name}\n"
-            f"Username: @{user.username if user.username else 'None'}\n"
-            f"ID: `{user.id}`"
-        ),
-        reply_markup=keyboard,
-        parse_mode="Markdown"
+async def help_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    await update.effective_message.reply_text(
+        HELP_TEXT,
+        parse_mode="HTML",
     )
 
 
 # =========================================================
-# HELP
+# ACCESS REQUEST
 # =========================================================
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def notify_owner(update, user):
 
-    if not is_allowed(update):
-        return
-
-    text = (
-        "📚 *FixMyEnglish*\n\n"
-        "✏️ `/correct` — Correct a message\n"
-        "🤖 `/autocorrect on` — Automatic correction\n"
-        "🛑 `/autocorrect off` — Turn automatic correction off\n"
-        "📊 `/mystats` — Your common mistakes\n\n"
-        "The bot can also learn from repeated English mistakes."
-    )
-
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# APPROVAL CALLBACKS
-# =========================================================
-
-async def approval_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    query = update.callback_query
-    await query.answer()
-
-    if query.from_user.id != OWNER_ID:
-        return
-
-    data = query.data
-
-    # -----------------------------------------------------
-    # USER ACCEPT
-    # -----------------------------------------------------
-
-    if data.startswith("accept_user:"):
-
-        user_id = int(data.split(":")[1])
-
-        if user_id not in allowed_users:
-            allowed_users.append(user_id)
-            save_json(ALLOWED_USERS_FILE, allowed_users)
-
-        await query.edit_message_text(
-            "✅ User approved."
-        )
-
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    "🎉 Your access has been approved!\n\n"
-                    "Welcome to FixMyEnglish 🤍\n\n"
-                    "FixMyEnglish is an English-learning bot that helps you:\n"
-                    "✏️ Correct English mistakes\n"
-                    "📚 Learn from your mistakes\n"
-                    "🧠 Improve your English step by step\n\n"
-                    "You can now use the bot."
-                )
-            )
-        except Exception:
-            pass
-
-    # -----------------------------------------------------
-    # USER REJECT
-    # -----------------------------------------------------
-
-    elif data.startswith("reject_user:"):
-
-        user_id = int(data.split(":")[1])
-
-        await query.edit_message_text(
-            "❌ User rejected."
-        )
-
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    "❌ Your access request was not approved.\n\n"
-                    "You cannot use FixMyEnglish at the moment."
-                )
-            )
-        except Exception:
-            pass
-
-    # -----------------------------------------------------
-    # GROUP ACCEPT
-    # -----------------------------------------------------
-
-    elif data.startswith("accept_group:"):
-
-        group_id = int(data.split(":")[1])
-
-        if group_id not in allowed_groups:
-            allowed_groups.append(group_id)
-            save_json(ALLOWED_GROUPS_FILE, allowed_groups)
-
-        await query.edit_message_text(
-            "✅ Group approved."
-        )
-
-        try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                text=(
-                    "🎉 This group has been approved!\n\n"
-                    "Welcome to FixMyEnglish 🤍\n\n"
-                    "The bot is now active in this group and "
-                    "will help members improve their English."
-                )
-            )
-        except Exception:
-            pass
-
-    # -----------------------------------------------------
-    # GROUP REJECT
-    # -----------------------------------------------------
-
-    elif data.startswith("reject_group:"):
-
-        group_id = int(data.split(":")[1])
-
-        await query.edit_message_text(
-            "❌ Group rejected."
-        )
-
-
-# =========================================================
-# BOT ADDED TO GROUP
-# =========================================================
-
-async def bot_membership(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    chat_member = update.my_chat_member
-
-    if not chat_member:
-        return
-
-    chat = chat_member.chat
-
-    old_status = chat_member.old_chat_member.status
-    new_status = chat_member.new_chat_member.status
-
-    if new_status in ("member", "administrator"):
-
-        if old_status in ("left", "kicked"):
-
-            save_group_info(chat)
-
-            if chat.id in allowed_groups:
-                return
-
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "✅ Accept",
-                        callback_data=f"accept_group:{chat.id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Reject",
-                        callback_data=f"reject_group:{chat.id}"
-                    ),
-                ]
-            ])
-
-            await context.bot.send_message(
-                chat_id=OWNER_ID,
-                text=(
-                    "👥 New group request\n\n"
-                    f"Group: {chat.title}\n"
-                    f"ID: `{chat.id}`"
-                ),
-                reply_markup=keyboard,
-                parse_mode="Markdown"
-            )
-
-
-# =========================================================
-# OWNER /LIST
-# =========================================================
-
-async def list_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    text = "📋 *Approved Users*\n\n"
-
-    if not allowed_users:
-        text += "No approved users.\n"
-    else:
-        for user_id in allowed_users:
-
-            info = users_info.get(
-                str(user_id),
-                {}
-            )
-
-            name = info.get("name", "Unknown")
-            username = info.get("username", "No username")
-
-            text += (
-                f"👤 {name}\n"
-                f"Username: @{username.replace('@', '')}\n"
-                f"ID: `{user_id}`\n\n"
-            )
-
-    text += "\n📋 *Approved Groups*\n\n"
-
-    if not allowed_groups:
-        text += "No approved groups.\n"
-    else:
-        for group_id in allowed_groups:
-
-            info = groups_info.get(
-                str(group_id),
-                {}
-            )
-
-            title = info.get("title", "Unknown")
-
-            text += (
-                f"👥 {title}\n"
-                f"ID: `{group_id}`\n\n"
-            )
-
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# OWNER /DEL
-# =========================================================
-
-async def delete_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if update.effective_user.id != OWNER_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text(
-            "Usage:\n/del USER_ID or GROUP_ID"
-        )
+    if OWNER_ID == 0:
         return
 
     try:
-        target_id = int(context.args[0])
+
+        name = user.full_name or "Unknown"
+        username = (
+            f"@{user.username}"
+            if user.username
+            else "No username"
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Approve",
+                        callback_data=f"approve:{user.id}",
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Reject",
+                        callback_data=f"reject:{user.id}",
+                    ),
+                ]
+            ]
+        )
+
+        await context_bot_send(
+            update,
+            (
+                "🔔 <b>New access request</b>\n\n"
+                f"👤 Name: {name}\n"
+                f"🔗 Username: {username}\n"
+                f"🆔 ID: <code>{user.id}</code>"
+            ),
+            keyboard,
+        )
+
+    except Exception as e:
+        print("Notify owner error:", repr(e))
+
+
+async def context_bot_send(update, text, keyboard):
+
+    await update.get_bot().send_message(
+        chat_id=OWNER_ID,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def access_callback(update, context):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    if not is_owner(query.from_user.id):
+        await query.answer(
+            "Owner only.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    data = query.data or ""
+
+    if ":" not in data:
+        return
+
+    action, user_id_text = data.split(":", 1)
+
+    try:
+        user_id = int(user_id_text)
     except ValueError:
-        await update.message.reply_text(
-            "❌ Invalid ID."
-        )
         return
 
-    changed = False
+    if action == "approve":
 
-    if target_id in allowed_users:
-        allowed_users.remove(target_id)
-        save_json(ALLOWED_USERS_FILE, allowed_users)
-        changed = True
+        add_approved(user_id)
+        remove_pending(user_id)
 
-    if target_id in allowed_groups:
-        allowed_groups.remove(target_id)
-        save_json(ALLOWED_GROUPS_FILE, allowed_groups)
-        changed = True
-
-    if changed:
-        await update.message.reply_text(
-            "✅ Removed successfully."
-        )
-    else:
-        await update.message.reply_text(
-            "❌ ID not found."
+        await query.edit_message_text(
+            f"✅ User <code>{user_id}</code> approved.",
+            parse_mode="HTML",
         )
 
-
-# =========================================================
-# BASIC CORRECTION ENGINE
-# =========================================================
-
-SPELLING_FIXES = {
-    "yestarday": "yesterday",
-    "tomorow": "tomorrow",
-    "becouse": "because",
-    "beacuse": "because",
-    "frend": "friend",
-    "freind": "friend",
-    "recieve": "receive",
-    "adress": "address",
-    "definately": "definitely",
-    "seperate": "separate",
-    "wierd": "weird",
-    "littel": "little",
-    "becasue": "because",
-    "writting": "writing",
-    "studing": "studying",
-    "langauge": "language",
-    "enviroment": "environment",
-    " goverment": " government",
-}
-
-
-IRREGULAR_PAST = {
-    "go": "went",
-    "see": "saw",
-    "come": "came",
-    "eat": "ate",
-    "take": "took",
-    "make": "made",
-    "have": "had",
-    "get": "got",
-}
-
-
-def preserve_case(original, corrected):
-
-    if original.isupper():
-        return corrected.upper()
-
-    if original[:1].isupper():
-        return corrected.capitalize()
-
-    return corrected
-
-
-def basic_correction(text):
-
-    corrected = text
-    changes = []
-
-    # -----------------------------------------------------
-    # SPELLING
-    # -----------------------------------------------------
-
-    def spelling_replace(match):
-
-        word = match.group(0)
-        lower = word.lower()
-
-        if lower in SPELLING_FIXES:
-
-            new_word = preserve_case(
-                word,
-                SPELLING_FIXES[lower]
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="✅ Your access to FixMyEnglish has been approved!",
             )
+        except Exception as e:
+            print("Approval message error:", repr(e))
 
-            if new_word != word:
-                changes.append((word, new_word))
+    elif action == "reject":
 
-            return new_word
+        remove_pending(user_id)
 
-        return word
-
-    corrected = re.sub(
-        r"[A-Za-z]+",
-        spelling_replace,
-        corrected
-    )
-
-    # -----------------------------------------------------
-    # I + IS / ARE
-    # -----------------------------------------------------
-
-    patterns = [
-        (r"\bI\s+is\b", "I am"),
-        (r"\bI\s+are\b", "I am"),
-        (r"\bI\s+has\b", "I have"),
-        (r"\bhe\s+are\b", "he is"),
-        (r"\bshe\s+are\b", "she is"),
-        (r"\bit\s+are\b", "it is"),
-        (r"\bthey\s+is\b", "they are"),
-        (r"\bwe\s+is\b", "we are"),
-        (r"\byou\s+is\b", "you are"),
-    ]
-
-    for pattern, replacement in patterns:
-
-        new_text = re.sub(
-            pattern,
-            replacement,
-            corrected,
-            flags=re.IGNORECASE
+        await query.edit_message_text(
+            f"❌ User <code>{user_id}</code> rejected.",
+            parse_mode="HTML",
         )
 
-        if new_text != corrected:
-
-            found = re.search(
-                pattern,
-                corrected,
-                flags=re.IGNORECASE
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ Your access request was not approved.",
             )
-
-            if found:
-                changes.append(
-                    (
-                        found.group(0),
-                        replacement
-                    )
-                )
-
-            corrected = new_text
-
-    # -----------------------------------------------------
-    # HE / SHE / IT
-    # -----------------------------------------------------
-
-    subject_verbs = {
-        "go": "goes",
-        "do": "does",
-        "have": "has",
-        "watch": "watches",
-        "wash": "washes",
-        "study": "studies",
-    }
-
-    for verb, new_verb in subject_verbs.items():
-
-        pattern = rf"\b(he|she|it)\s+{verb}\b"
-
-        match = re.search(
-            pattern,
-            corrected,
-            flags=re.IGNORECASE
-        )
-
-        if match:
-
-            subject = match.group(1)
-
-            replacement = f"{subject} {new_verb}"
-
-            corrected = re.sub(
-                pattern,
-                replacement,
-                corrected,
-                flags=re.IGNORECASE
-            )
-
-            changes.append(
-                (
-                    f"{subject} {verb}",
-                    replacement
-                )
-            )
-
-    # -----------------------------------------------------
-    # SIMPLE PAST
-    # -----------------------------------------------------
-
-    for verb, past in IRREGULAR_PAST.items():
-
-        pattern = rf"\b(I|he|she|we|they|you)\s+{verb}\s+(yesterday|last night|last week)\b"
-
-        match = re.search(
-            pattern,
-            corrected,
-            flags=re.IGNORECASE
-        )
-
-        if match:
-
-            subject = match.group(1)
-            time_word = match.group(2)
-
-            replacement = f"{subject} {past} {time_word}"
-
-            corrected = re.sub(
-                pattern,
-                replacement,
-                corrected,
-                flags=re.IGNORECASE
-            )
-
-            changes.append(
-                (
-                    f"{subject} {verb} {time_word}",
-                    replacement
-                )
-            )
-
-    return corrected, changes
+        except Exception as e:
+            print("Reject message error:", repr(e))
 
 
 # =========================================================
-# SAVE ERROR
+# OWNER COMMANDS
 # =========================================================
 
-def save_error(user_id, wrong, right):
+def extract_user_id(message):
 
-    user_key = str(user_id)
+    target = get_target_text(message)
 
-    if user_key not in user_errors:
-        user_errors[user_key] = {
-            "total": 0,
-            "mistakes": {}
-        }
+    if not target:
+        return None
 
-    user_errors[user_key]["total"] += 1
+    match = re.search(r"-?\d+", target)
 
-    key = f"{wrong}|||{right}"
+    if not match:
+        return None
 
-    mistakes = user_errors[user_key]["mistakes"]
+    try:
+        return int(match.group())
+    except ValueError:
+        return None
 
-    mistakes[key] = mistakes.get(key, 0) + 1
 
-    save_json(
-        USER_ERRORS_FILE,
-        user_errors
+async def add_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    user_id = extract_user_id(update.effective_message)
+
+    if user_id is None:
+
+        await update.effective_message.reply_text(
+            "Usage:\n"
+            "/add USER_ID\n\n"
+            "Or reply to the user's message with /add"
+        )
+
+        return
+
+    add_approved(user_id)
+    remove_pending(user_id)
+
+    await update.effective_message.reply_text(
+        f"✅ User {user_id} approved."
+    )
+
+
+async def del_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    user_id = extract_user_id(update.effective_message)
+
+    if user_id is None:
+
+        await update.effective_message.reply_text(
+            "Usage:\n"
+            "/del USER_ID"
+        )
+
+        return
+
+    remove_approved(user_id)
+
+    await update.effective_message.reply_text(
+        f"🗑️ User {user_id} removed."
+    )
+
+
+async def list_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    approved = (
+        "\n".join(
+            f"• <code>{uid}</code>"
+            for uid in approved_users
+        )
+        if approved_users
+        else "None"
+    )
+
+    pending = (
+        "\n".join(
+            f"• <code>{uid}</code>"
+            for uid in pending_users
+        )
+        if pending_users
+        else "None"
+    )
+
+    await update.effective_message.reply_text(
+        "👑 <b>Users</b>\n\n"
+        f"✅ <b>Approved:</b>\n{approved}\n\n"
+        f"⏳ <b>Pending:</b>\n{pending}",
+        parse_mode="HTML",
+    )
+
+
+async def approve_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    user_id = extract_user_id(update.effective_message)
+
+    if user_id is None:
+
+        await update.effective_message.reply_text(
+            "Usage: /approve USER_ID"
+        )
+
+        return
+
+    add_approved(user_id)
+    remove_pending(user_id)
+
+    await update.effective_message.reply_text(
+        f"✅ User {user_id} approved."
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="✅ Your access has been approved!",
+        )
+    except Exception as e:
+        print("Approval message error:", repr(e))
+
+
+async def reject_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    user_id = extract_user_id(update.effective_message)
+
+    if user_id is None:
+
+        await update.effective_message.reply_text(
+            "Usage: /reject USER_ID"
+        )
+
+        return
+
+    remove_pending(user_id)
+
+    await update.effective_message.reply_text(
+        f"❌ User {user_id} rejected."
+    )
+
+
+async def stats_command(update, context):
+
+    if not is_owner(update.effective_user.id):
+        return
+
+    await update.effective_message.reply_text(
+        "📊 <b>Statistics</b>\n\n"
+        f"👥 Approved users: {len(approved_users)}\n"
+        f"⏳ Pending users: {len(pending_users)}",
+        parse_mode="HTML",
     )
 
 
 # =========================================================
-# CORRECTION MESSAGE
+# SLASH COMMANDS
 # =========================================================
 
-async def send_correction(
-    update,
-    corrected,
-    changes
-):
+async def tr_command(update, context):
 
-    if not changes:
+    if not is_approved(update.effective_user.id):
         return
 
-    lines = []
-
-    for wrong, right in changes:
-        lines.append(
-            f"`{wrong}` → `{right}`"
-        )
-
-    text = (
-        "✏️ *Correction*\n\n"
-        f"{corrected}\n\n"
-        "🔴 *Mistakes:*\n"
-        + "\n".join(lines)
-    )
-
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# /CORRECT
-# =========================================================
-
-async def correct_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_allowed(update):
-        return
-
-    message = update.message
-
-    if not message.reply_to_message:
-        await message.reply_text(
-            "↩️ Reply to an English message with /correct"
-        )
-        return
-
-    target = message.reply_to_message
-
-    if not target.text:
-        await message.reply_text(
-            "❌ I can only correct text messages."
-        )
-        return
-
-    text = target.text.strip()
-
-    if len(text) > 1500:
-        await message.reply_text(
-            "⚠️ The message is too long."
-        )
-        return
-
-    corrected, changes = basic_correction(text)
-
-    if not changes:
-        await message.reply_text(
-            "✅ No obvious mistake found."
-        )
-        return
-
-    for wrong, right in changes:
-        save_error(
-            update.effective_user.id,
-            wrong,
-            right
-        )
-
-    await send_correction(
-        update,
-        corrected,
-        changes
-    )
-
-
-# =========================================================
-# /AUTOCORRECT
-# =========================================================
-
-async def autocorrect_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_allowed(update):
-        return
-
-    chat_id = str(update.effective_chat.id)
-
-    if not context.args:
-
-        enabled = chat_settings.get(
-            chat_id,
-            True
-        )
-
-        status = "ON 🟢" if enabled else "OFF 🔴"
-
-        await update.message.reply_text(
-            f"🤖 Auto-correction: {status}\n\n"
-            "Use:\n"
-            "/autocorrect on\n"
-            "/autocorrect off"
-        )
-
-        return
-
-    option = context.args[0].lower()
-
-    if option == "on":
-
-        chat_settings[chat_id] = True
-
-        save_json(
-            CHAT_SETTINGS_FILE,
-            chat_settings
-        )
-
-        await update.message.reply_text(
-            "🤖 Auto-correction is now ON 🟢"
-        )
-
-    elif option == "off":
-
-        chat_settings[chat_id] = False
-
-        save_json(
-            CHAT_SETTINGS_FILE,
-            chat_settings
-        )
-
-        await update.message.reply_text(
-            "🤖 Auto-correction is now OFF 🔴"
-        )
-
-    else:
-
-        await update.message.reply_text(
-            "Use:\n"
-            "/autocorrect on\n"
-            "/autocorrect off"
-        )
-
-
-# =========================================================
-# /MYSTATS
-# =========================================================
-
-async def mystats_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_allowed(update):
-        return
-
-    user_id = str(update.effective_user.id)
-
-    data = user_errors.get(
-        user_id,
-        {
-            "total": 0,
-            "mistakes": {}
-        }
-    )
-
-    total = data.get("total", 0)
-    mistakes = data.get("mistakes", {})
-
-    if not mistakes:
-
-        await update.message.reply_text(
-            "📊 You don't have any saved mistakes yet."
-        )
-        return
-
-    sorted_mistakes = sorted(
-        mistakes.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    lines = [
-        "📊 *Your English Mistakes*",
-        "",
-        f"Total corrections: {total}",
-        ""
-    ]
-
-    for key, count in sorted_mistakes[:10]:
-
-        wrong, right = key.split(
-            "|||",
-            1
-        )
-
-        lines.append(
-            f"• `{wrong}` → `{right}` ({count}x)"
-        )
-
-    await update.message.reply_text(
-        "\n".join(lines),
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# NAME RECOGNITION + DUA
-# =========================================================
-
-NAME_PATTERNS = [
-    # Arabic
-    r"(?<!\w)عبد\s*الكريم(?!\w)",
-    r"(?<!\w)عبد\s+الكريم(?!\w)",
-    r"(?<!\w)كريم(?!\w)",
-
-    # Latin / French
-    r"(?i)(?<![a-z])abdelkarim(?![a-z])",
-    r"(?i)(?<![a-z])abdel\s+karim(?![a-z])",
-    r"(?i)(?<![a-z])abdelkrim(?![a-z])",
-    r"(?i)(?<![a-z])abd\s+el\s+karim(?![a-z])",
-    r"(?i)(?<![a-z])abd\s+elkrim(?![a-z])",
-]
-
-
-DUAS = [
-    "May Allah bless you with happiness, peace, and success. 🤲",
-    "May Allah grant you goodness in this life and the Hereafter. 🤲",
-    "May Allah protect you, guide you, and bless your path. 🤲",
-    "May Allah fill your heart with peace and your life with blessings. 🤲",
-    "May Allah make your affairs easy and bless you with what is good. 🤲",
-    "May Allah reward you with goodness and grant you lasting happiness. 🤲",
-    "May Allah open good doors for you and bless your efforts. 🤲",
-    "May Allah grant you beneficial knowledge and righteous deeds. 🤲",
-    "May Allah keep you safe, guide you to what is best, and bless your days. 🤲",
-    "May Allah grant you peace of heart, strength, and success. 🤲",
-    "May Allah bless your family and grant you goodness and tranquility. 🤲",
-    "May Allah forgive your shortcomings and increase you in goodness. 🤲",
-    "May Allah make your future better than your past and bless your journey. 🤲",
-    "May Allah grant you what is good for you and keep harmful things away from you. 🤲",
-    "May Allah increase you in faith, wisdom, and beneficial knowledge. 🤲",
-    "May Allah bless your time, your efforts, and your goals. 🤲",
-    "May Allah grant you ease after every difficulty and happiness after every hardship. 🤲",
-    "May Allah guide your heart, protect you from harm, and bless your life. 🤲",
-    "May Allah grant you a peaceful heart and a blessed life. 🤲",
-    "May Allah accept your good deeds and bless you with goodness in abundance. 🤲",
-]
-
-
-def name_is_mentioned(text):
+    text = get_target_text(update.effective_message)
 
     if not text:
-        return False
 
-    for pattern in NAME_PATTERNS:
+        await update.effective_message.reply_text(
+            "Usage: /tr text\n\n"
+            "Or reply to a message with /tr"
+        )
 
-        if re.search(pattern, text):
-            return True
-
-    return False
-
-
-async def name_mention_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    message = update.message
-
-    if not message:
         return
 
-    if not message.text:
+    await send_long_reply(
+        update,
+        translate_text(text),
+    )
+
+
+async def cor_command(update, context):
+
+    if not is_approved(update.effective_user.id):
         return
 
-    chat = update.effective_chat
+    text = get_target_text(update.effective_message)
 
-    # Only groups
-    if chat.type not in ("group", "supergroup"):
+    if not text:
+
+        await update.effective_message.reply_text(
+            "Usage: /cor text"
+        )
+
         return
 
-    # Only approved groups
-    if chat.id not in allowed_groups and update.effective_user.id != OWNER_ID:
+    await send_long_reply(
+        update,
+        correct_text(text),
+    )
+
+
+async def ex_command(update, context):
+
+    if not is_approved(update.effective_user.id):
         return
 
-    text = message.text
+    text = get_target_text(update.effective_message)
 
-    if name_is_mentioned(text):
+    if not text:
 
-        dua = random.choice(DUAS)
+        await update.effective_message.reply_text(
+            "Usage: /ex word"
+        )
 
-        await message.reply_text(
-            dua,
-            reply_to_message_id=message.message_id
+        return
+
+    await send_long_reply(
+        update,
+        explain_text(text),
+    )
+
+
+async def syn_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+
+        await update.effective_message.reply_text(
+            "Usage: /syn word"
+        )
+
+        return
+
+    await send_long_reply(
+        update,
+        synonyms_text(text),
+    )
+
+
+async def use_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+
+        await update.effective_message.reply_text(
+            "Usage: /use word"
+        )
+
+        return
+
+    await send_long_reply(
+        update,
+        use_word(text),
+    )
+
+
+async def ai_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+
+        await update.effective_message.reply_text(
+            "Usage:\n/ai your request"
+        )
+
+        return
+
+    await send_long_reply(
+        update,
+        free_ai(text),
+    )
+
+
+async def us_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+        await update.effective_message.reply_text(
+            "Usage: /us word"
+        )
+        return
+
+    await send_pronunciation(
+        update,
+        text,
+        "US",
+    )
+
+
+async def uk_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+        await update.effective_message.reply_text(
+            "Usage: /uk word"
+        )
+        return
+
+    await send_pronunciation(
+        update,
+        text,
+        "UK",
+    )
+
+
+async def pr_command(update, context):
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+        await update.effective_message.reply_text(
+            "Usage: /pr word"
+        )
+        return
+
+    await send_pronunciation(
+        update,
+        text,
+        "BOTH",
+    )
+
+
+# =========================================================
+# ARABIC COMMANDS
+# =========================================================
+
+ARABIC_COMMANDS = {
+    "ترجم": "tr",
+    "صحح": "cor",
+    "اشرح": "ex",
+    "مرادف": "syn",
+    "ضد": "ant",
+    "وظف": "use",
+    "امريكي": "us",
+    "بريطاني": "uk",
+    "انطق": "pr",
+}
+
+
+async def arabic_command_handler(update, context):
+
+    message = update.effective_message
+
+    if not message or not message.text:
+        return
+
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = message.text.strip()
+
+    parts = text.split(maxsplit=1)
+
+    command = parts[0].lower()
+
+    if command not in ARABIC_COMMANDS:
+        return
+
+    action = ARABIC_COMMANDS[command]
+
+    argument = (
+        parts[1].strip()
+        if len(parts) == 2
+        else ""
+    )
+
+    # A bare command does nothing,
+    # unless it is a reply.
+    if not argument:
+        argument = get_reply_text(message)
+
+    if not argument:
+        return
+
+    if action == "tr":
+
+        await send_long_reply(
+            update,
+            translate_text(argument),
+        )
+
+    elif action == "cor":
+
+        await send_long_reply(
+            update,
+            correct_text(argument),
+        )
+
+    elif action == "ex":
+
+        await send_long_reply(
+            update,
+            explain_text(argument),
+        )
+
+    elif action == "syn":
+
+        await send_long_reply(
+            update,
+            synonyms_text(argument),
+        )
+
+    elif action == "ant":
+
+        await send_long_reply(
+            update,
+            antonyms_text(argument),
+        )
+
+    elif action == "use":
+
+        await send_long_reply(
+            update,
+            use_word(argument),
+        )
+
+    elif action == "us":
+
+        await send_pronunciation(
+            update,
+            argument,
+            "US",
+        )
+
+    elif action == "uk":
+
+        await send_pronunciation(
+            update,
+            argument,
+            "UK",
+        )
+
+    elif action == "pr":
+
+        await send_pronunciation(
+            update,
+            argument,
+            "BOTH",
         )
 
 
 # =========================================================
-# AUTOMATIC CORRECTION
+# NORMAL MESSAGE HANDLER
 # =========================================================
 
-async def automatic_correction(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def normal_message_handler(update, context):
 
-    message = update.message
+    message = update.effective_message
 
     if not message or not message.text:
         return
 
     text = message.text.strip()
 
-    # Ignore commands
-    if text.startswith("/"):
-        return
+    first_word = text.split(maxsplit=1)[0].lower()
 
-    if not is_allowed(update):
-        return
+    if first_word in ARABIC_COMMANDS:
 
-    # Ignore Arabic-only messages
-    english_letters = re.findall(
-        r"[A-Za-z]",
-        text
-    )
-
-    if len(english_letters) < 3:
-        return
-
-    # Ignore very long messages
-    if len(text) > 1500:
-        return
-
-    chat_id = str(
-        update.effective_chat.id
-    )
-
-    enabled = chat_settings.get(
-        chat_id,
-        True
-    )
-
-    if not enabled:
-        return
-
-    corrected, changes = basic_correction(text)
-
-    if not changes:
-        return
-
-    for wrong, right in changes:
-
-        save_error(
-            update.effective_user.id,
-            wrong,
-            right
+        await arabic_command_handler(
+            update,
+            context,
         )
 
-    await send_correction(
+        return
+
+    # Normal messages:
+    # only check for the special name feature.
+    await name_reaction(
         update,
-        corrected,
-        changes
+        context,
     )
 
 
 # =========================================================
-# MAIN MESSAGE HANDLER
+# ERROR
 # =========================================================
 
-async def text_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def error_handler(update, context):
 
-    if not update.message:
-        return
-
-    if not update.message.text:
-        return
-
-    # Name recognition first
-    await name_mention_handler(
-        update,
-        context
+    print(
+        "Telegram error:",
+        repr(context.error),
     )
 
-    # Then automatic correction
-    await automatic_correction(
-        update,
-        context
+
+# =========================================================
+# FLASK
+# =========================================================
+
+@app.route("/")
+def home():
+
+    return "FixMyEnglish is alive!"
+
+
+@app.route("/health")
+def health():
+
+    return {
+        "status": "ok",
+        "bot": "FixMyEnglish",
+    }
+
+
+def run_flask():
+
+    port = int(
+        os.getenv(
+            "PORT",
+            "10000",
+        )
     )
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
+
+
+# =========================================================
+# TELEGRAM COMMAND MENU
+# =========================================================
+
+async def post_init(application):
+
+    try:
+
+        await application.bot.set_my_commands(
+            [
+                ("start", "Start FixMyEnglish"),
+                ("help", "Show commands"),
+                ("tr", "Translate"),
+                ("cor", "Correct English"),
+                ("ex", "Explain"),
+                ("syn", "Synonyms"),
+                ("use", "Use a word"),
+                ("us", "American pronunciation"),
+                ("uk", "British pronunciation"),
+                ("pr", "Both pronunciations"),
+                ("ai", "Ask AI"),
+            ]
+        )
+
+    except Exception as e:
+
+        print(
+            "Command menu error:",
+            repr(e),
+        )
+
+
+# =========================================================
+# BUILD BOT
+# =========================================================
+
+def build_application():
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    # General
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "help",
+            help_command,
+        )
+    )
+
+    # Language
+    application.add_handler(
+        CommandHandler(
+            "tr",
+            tr_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "cor",
+            cor_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ex",
+            ex_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "syn",
+            syn_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "use",
+            use_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ai",
+            ai_command,
+        )
+    )
+
+    # Pronunciation
+    application.add_handler(
+        CommandHandler(
+            "us",
+            us_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "uk",
+            uk_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "pr",
+            pr_command,
+        )
+    )
+
+    # Owner
+    application.add_handler(
+        CommandHandler(
+            "add",
+            add_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "del",
+            del_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "list",
+            list_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "approve",
+            approve_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "reject",
+            reject_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "stats",
+            stats_command,
+        )
+    )
+
+    # Approval buttons
+    application.add_handler(
+        CallbackQueryHandler(
+            access_callback,
+        )
+    )
+
+    # Normal text
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            normal_message_handler,
+        )
+    )
+
+    application.add_error_handler(
+        error_handler
+    )
+
+    return application
 
 
 # =========================================================
@@ -1167,95 +1851,36 @@ async def text_handler(
 
 def main():
 
-    # Render web server
-    Thread(
-        target=run_web,
-        daemon=True
-    ).start()
-
-    application = (
-        Application.builder()
-        .token(TOKEN)
-        .build()
-    )
-
-    # Commands
-    application.add_handler(
-        CommandHandler(
-            "start",
-            start
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN is missing."
         )
-    )
 
-    application.add_handler(
-        CommandHandler(
-            "help",
-            help_command
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY is missing."
         )
+
+    print(
+        "Starting FixMyEnglish..."
     )
 
-    application.add_handler(
-        CommandHandler(
-            "correct",
-            correct_command
-        )
+    flask_thread = threading.Thread(
+        target=run_flask,
+        daemon=True,
     )
 
-    application.add_handler(
-        CommandHandler(
-            "autocorrect",
-            autocorrect_command
-        )
-    )
+    flask_thread.start()
 
-    application.add_handler(
-        CommandHandler(
-            "mystats",
-            mystats_command
-        )
-    )
+    application = build_application()
 
-    application.add_handler(
-        CommandHandler(
-            "list",
-            list_command
-        )
+    print(
+        "FixMyEnglish is running..."
     )
-
-    application.add_handler(
-        CommandHandler(
-            "del",
-            delete_command
-        )
-    )
-
-    # Approval buttons
-    application.add_handler(
-        CallbackQueryHandler(
-            approval_callback
-        )
-    )
-
-    # Bot added / removed from groups
-    application.add_handler(
-        ChatMemberHandler(
-            bot_membership,
-            ChatMemberHandler.MY_CHAT_MEMBER
-        )
-    )
-
-    # Text messages
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            text_handler
-        )
-    )
-
-    print("FixMyEnglish is running...")
 
     application.run_polling(
-        allowed_updates=Update.ALL_TYPES
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
     )
 
 
