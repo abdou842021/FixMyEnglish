@@ -278,38 +278,45 @@ Text:
     )
 
 
+# =========================================================
+# AI FUNCTIONS — ORGANIZED ANSWERS
+# =========================================================
+
 def correct_text(text):
     return ask_groq(
         f"""
-Correct this English text comprehensively.
+Correct this English text for an Arabic-speaking learner.
 
-Check:
-- spelling
-- typing mistakes
-- word forms
-- grammar
-- punctuation
-- capitalization
-- word choice
-- context
+Use EXACTLY this format:
 
-If a word is obviously mistyped, infer the intended word.
-
-Use exactly this format:
+✍️ Correction
+━━━━━━━━━━━━
 
 ✅ Correct:
 [corrected text]
 
 📝 Corrections:
-- [important corrections]
+• [mistake → correction + very short explanation]
+• [mistake → correction + very short explanation]
 
 🇩🇿 Arabic meaning:
-[meaning]
+[natural Arabic translation]
+
+━━━━━━━━━━━━
+
+Rules:
+- If there are no mistakes, write: ✅ No important mistakes found.
+- Do not invent mistakes.
+- Keep the answer short.
+- Mention only important corrections.
+- If a word is obviously mistyped, infer the intended word.
+- Do not add unnecessary sections.
+- Keep the same format every time.
 
 Text:
 {text}
 """,
-        1600,
+        1200,
     )
 
 
@@ -318,46 +325,101 @@ def explain_text(text):
         f"""
 Explain this English word or expression to an Arabic-speaking learner.
 
-Include:
-• Arabic meaning
-• Part of speech
-• Other common meanings
-• Common preposition or fixed phrase if useful
-• Two natural English examples
-• Arabic translation of each example
+Use EXACTLY this format:
 
-Keep it concise.
+📖 Explanation
+━━━━━━━━━━━━
+
+🔤 Word:
+{text}
+
+🇩🇿 Meaning:
+[main Arabic meaning]
+
+🏷️ Part of speech:
+[noun / verb / adjective / adverb / expression]
+
+📚 Explanation:
+[short and simple explanation]
+
+🔗 Common use:
+[common preposition, phrase, or collocation if useful]
+
+📝 Examples:
+
+1️⃣ [English example]
+🇩🇿 [Arabic translation]
+
+2️⃣ [English example]
+🇩🇿 [Arabic translation]
+
+━━━━━━━━━━━━
+
+Rules:
+- Be concise.
+- Give the most common meaning first.
+- Mention other meanings only if important.
+- Do not invent meanings or expressions.
+- Use natural examples.
+- Do not add unnecessary information.
 
 Word/expression:
 {text}
 """,
-        1400,
+        1200,
     )
 
 
 def synonyms_text(text):
     return ask_groq(
         f"""
-For this English word/expression provide:
+Give useful synonyms and antonyms for this English word.
 
-🔹 Synonyms:
-5 useful synonyms
+Use EXACTLY this format:
 
-🔻 Antonyms:
-5 genuine antonyms when possible
+🔤 Word:
+{text}
 
-🇩🇿 Arabic meaning:
-...
+━━━━━━━━━━━━
 
-Example:
-One natural English example + Arabic translation.
+🇩🇿 Meaning:
+[main Arabic meaning]
 
-Do not invent antonyms.
+🔄 Synonyms:
+• [synonym]
+• [synonym]
+• [synonym]
+• [synonym]
+• [synonym]
+
+↔️ Antonyms:
+• [antonym]
+• [antonym]
+• [antonym]
+• [antonym]
+• [antonym]
+
+📝 Example:
+[English sentence]
+
+🇩🇿 Translation:
+[Arabic translation]
+
+━━━━━━━━━━━━
+
+Rules:
+- Give natural and useful synonyms.
+- Give up to 5 synonyms.
+- Give genuine antonyms only.
+- If fewer genuine antonyms exist, give fewer.
+- Never invent antonyms.
+- Avoid repetition.
+- Keep the answer concise.
 
 Word:
 {text}
 """,
-        1200,
+        1100,
     )
 
 
@@ -366,25 +428,39 @@ def antonyms_text(text):
         f"""
 Give useful antonyms for this English word.
 
-Format:
+Use EXACTLY this format:
 
-🔹 Word: {text}
+🔤 Word:
+{text}
 
-🔻 Antonyms:
-- ...
-- ...
-- ...
-- ...
-- ...
+━━━━━━━━━━━━
 
 🇩🇿 Meaning:
-...
+[main Arabic meaning]
 
-Ex:
-English sentence
-Arabic translation
+↔️ Antonyms:
+• [antonym]
+• [antonym]
+• [antonym]
+• [antonym]
+• [antonym]
 
-Do not invent antonyms.
+📝 Example:
+[English sentence]
+
+🇩🇿 Translation:
+[Arabic translation]
+
+━━━━━━━━━━━━
+
+Rules:
+- Give genuine antonyms only.
+- Never invent an antonym.
+- If fewer exist, give fewer.
+- Keep the answer short.
+
+Word:
+{text}
 """,
         900,
     )
@@ -393,35 +469,165 @@ Do not invent antonyms.
 def use_word(text):
     return ask_groq(
         f"""
-Use this English word/expression naturally.
+Explain how to use this English word or expression naturally.
 
-If it has several common meanings, explain each important meaning
-and give an example for each.
+Use EXACTLY this format:
 
-For every example:
-English sentence
-Arabic translation
+🧩 Word Usage
+━━━━━━━━━━━━
+
+🔤 Word:
+{text}
+
+🇩🇿 Meaning:
+[main Arabic meaning]
+
+📚 How to use it:
+[short explanation]
+
+📝 Examples:
+
+1️⃣ [English sentence]
+🇩🇿 [Arabic translation]
+
+2️⃣ [English sentence]
+🇩🇿 [Arabic translation]
+
+━━━━━━━━━━━━
+
+Rules:
+- Keep it concise.
+- Use natural English.
+- If there are several important meanings, separate them briefly.
+- Do not add unnecessary information.
 
 Word:
 {text}
 """,
-        1500,
+        1100,
     )
 
 
 def free_ai(text):
     return ask_groq(
         f"""
-The user asks:
+Answer the user's request directly and accurately.
 
+Use this format when appropriate:
+
+🤖 AI Answer
+━━━━━━━━━━━━
+
+📌 Answer:
+[short direct answer]
+
+📚 Explanation:
+[only if necessary]
+
+📝 Example:
+[only if useful]
+
+━━━━━━━━━━━━
+
+Rules:
+- Be as concise as possible.
+- Give only relevant information.
+- No long introduction.
+- No repetition.
+- No unnecessary details.
+- Use short paragraphs or bullet points.
+- For English-learning questions, explain clearly for an Arabic-speaking learner.
+- Use Arabic when helpful.
+- Do not force sections when they are unnecessary.
+
+User request:
 {text}
-
-Answer the request directly and accurately.
-If it concerns English learning, make the explanation useful for an
-Arabic-speaking learner.
 """,
-        1800,
+        1000,
     )
+
+
+def pronunciation_info(word, dialect):
+
+    if dialect == "US":
+        name = "American English"
+        flag = "🇺🇸"
+    else:
+        name = "British English"
+        flag = "🇬🇧"
+
+    return ask_groq(
+        f"""
+Give accurate pronunciation information for this English word
+in {name}.
+
+Use EXACTLY this format:
+
+🔊 Pronunciation
+━━━━━━━━━━━━
+
+🔤 Word:
+{word}
+
+{flag} IPA:
+[IPA]
+
+🇩🇿 Meaning:
+[short Arabic meaning]
+
+━━━━━━━━━━━━
+
+Rules:
+- Give standard IPA.
+- Give pronunciation for this word only.
+- Keep it concise.
+
+Word:
+{word}
+""",
+        700,
+    )
+
+
+def both_pronunciation(word):
+    return ask_groq(
+        f"""
+Give accurate pronunciation information for this English word.
+
+Use EXACTLY this format:
+
+🔊 Pronunciation
+━━━━━━━━━━━━
+
+🔤 Word:
+{word}
+
+🇺🇸 American:
+[IPA]
+
+🇬🇧 British:
+[IPA]
+
+🇩🇿 Meaning:
+[short Arabic meaning]
+
+━━━━━━━━━━━━
+
+Rules:
+- Give standard IPA.
+- Give pronunciation for this word only.
+- Keep it concise.
+
+Word:
+{word}
+""",
+        700,
+    )
+
+
+
+
+
 
 
 def pronunciation_info(word, dialect):
