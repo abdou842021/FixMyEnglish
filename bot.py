@@ -485,8 +485,7 @@ Word:
 
 # =========================================================
 # TEXT TO SPEECH
-# =========================================================
-async def send_pronunciation(update, word, dialect):
+# ========================================================
 # =========================================================
 # TEXT TO SPEECH
 # =========================================================
@@ -911,33 +910,6 @@ DUAS = [
 # NAME DETECTION
 # =========================================================
 
-NAME_PATTERNS = [
-    r"عبد\s*الكريم",
-    r"عبد\s+الكريم\s+حمدوش",
-    r"abdelkrim",
-    r"abd\s*el\s*krim",
-    r"abd\s*elkrim",
-    r"abdelkrim\s+hamdouche",
-    r"abd\s+el\s+krim\s+hamdouche",
-    r"abdou",
-    r"\bkarim\b",
-]
-
-
-def name_is_mentioned(text):
-
-    if not text:
-        return False
-
-    normalized = re.sub(r"\s+", " ", text.lower()).strip()
-
-    for pattern in NAME_PATTERNS:
-        if re.search(pattern, normalized, re.IGNORECASE):
-            return True
-
-    return False
-
-
 async def name_reaction(update, context):
 
     message = update.effective_message
@@ -945,9 +917,7 @@ async def name_reaction(update, context):
     if not message or not message.text:
         return
 
-    if not is_approved(update.effective_user.id):
-        return
-
+    # Anyone who mentions the owner's name gets a reaction + dua
     if not name_is_mentioned(message.text):
         return
 
@@ -961,12 +931,11 @@ async def name_reaction(update, context):
         )
 
     except Exception as e:
-        print("Reaction error:", repr(e))
+        print("Reaction error:", repr(e), flush=True)
 
     await message.reply_text(
         random.choice(DUAS)
     )
-
 
 # =========================================================
 # HELP
