@@ -1,4 +1,6 @@
 python-telegram-bot==22.8
 Flask==3.1.2
 groq
+edge-tts
+eng-to-ipa
 
