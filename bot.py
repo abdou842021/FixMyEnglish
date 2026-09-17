@@ -486,32 +486,6 @@ Word:
 # =========================================================
 # TEXT TO SPEECH
 # =========================================================
-
-async def make_audio(text, voice):
-
-    filename = None
-
-    try:
-        fd, filename = tempfile.mkstemp(suffix=".mp3")
-        os.close(fd)
-
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(filename)
-
-        return filename
-
-    except Exception as e:
-        print("TTS error:", repr(e))
-
-        if filename:
-            try:
-                os.remove(filename)
-            except Exception:
-                pass
-
-        return None
-
-
 async def send_pronunciation(update, word, dialect):
 
     message = update.effective_message
@@ -519,26 +493,44 @@ async def send_pronunciation(update, word, dialect):
     if not message:
         return
 
-    if not is_short_input(word):
+    # Count words
+    word_count = len(word.split())
+
+    # Maximum length: 700 words
+    if word_count > 700:
         await message.reply_text(
-            "ℹ️ Pronunciation is intended for short words or expressions. "
-            "For longer text, use /tr, /cor, or /ai."
+            "❌ The text is too long for pronunciation.\n"
+            "The maximum is 700 words."
         )
         return
 
+    # Select voice
     if dialect == "US":
-        info = pronunciation_info(word, "US")
         voice = US_VOICE
 
     elif dialect == "UK":
-        info = pronunciation_info(word, "UK")
         voice = UK_VOICE
 
     else:
-        info = both_pronunciation(word)
         voice = US_VOICE
 
-    await message.reply_text(info)
+    # 1–4 words:
+    # Send phonetics + audio
+    if word_count <= 4:
+
+        if dialect == "US":
+            info = pronunciation_info(word, "US")
+
+        elif dialect == "UK":
+            info = pronunciation_info(word, "UK")
+
+        else:
+            info = both_pronunciation(word)
+
+        await message.reply_text(info)
+
+    # 5–700 words:
+    # Audio only, no phonetics
 
     audio = await make_audio(word, voice)
 
@@ -556,6 +548,11 @@ async def send_pronunciation(update, word, dialect):
                 os.remove(audio)
             except Exception:
                 pass
+
+    else:
+        await message.reply_text(
+            "❌ I couldn't create the pronunciation audio."
+        )
 
 
 # =========================================================
