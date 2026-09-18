@@ -849,6 +849,7 @@ DUAS = [
     "🤲 May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
     "🤲 May Allah give you the strength to keep learning even when progress seems slow.",
     "🤲 May Allah reward your patience and make the fruits of your efforts greater than you expect.",
+    "Commands..."
     "🤲 May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
     "🤲 May Allah put barakah in everything beneficial that you learn and teach.",
     "🤲 May Allah make your words beneficial, your actions sincere, and your intentions pure.",
@@ -889,6 +890,7 @@ DUAS = [
     "🤲 May Allah make your learning a source of confidence, humility, and positive change.",
     "🤲 May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
     "🤲 May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
+    "🤲,
     "🤲 May Allah make your efforts meaningful, your progress steady, and your future blessed.",
     "🤲 May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
     "🤲 May Allah bless every good intention in your heart and every sincere effort you make.",
@@ -1032,10 +1034,20 @@ The command will be applied to the message you replied to.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    chat = update.effective_chat
 
-    if not user:
+    if not user or not chat:
         return
 
+    # إذا كان في المجموعة، يعمل فوراً للجميع بدون موافقة
+    if chat.type in ["group", "supergroup"]:
+        await update.effective_message.reply_text(
+            "👋 Hello everyone in the group! <b>FixMyEnglish Pro</b> is active and ready to help you with English.",
+            parse_mode="HTML",
+        )
+        return
+
+    # في الخاص: يحتاج موافقة
     if not is_approved(user.id):
         add_pending(user.id)
 
@@ -1066,7 +1078,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     await update.effective_message.reply_text(
@@ -1077,7 +1090,8 @@ async def help_command(update, context):
 
 async def talk_command(update, context):
     user = update.effective_user
-    if not is_approved(user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(user.id):
         return
 
     if user.id in talk_mode_users:
@@ -1095,8 +1109,10 @@ async def talk_command(update, context):
 
 async def vocab_command(update, context):
     user = update.effective_user
-    if not is_approved(user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(user.id):
         return
+
     uid_str = str(user.id)
     words = vocab_bank.get(uid_str, [])
     if not words:
@@ -1380,7 +1396,8 @@ async def stats_command(update, context):
 # =========================================================
 
 async def tr_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1399,7 +1416,8 @@ async def tr_command(update, context):
 
 
 async def cor_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1417,7 +1435,8 @@ async def cor_command(update, context):
 
 
 async def ex_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1436,7 +1455,8 @@ async def ex_command(update, context):
 
 
 async def syn_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1454,7 +1474,8 @@ async def syn_command(update, context):
 
 
 async def ant_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1472,7 +1493,8 @@ async def ant_command(update, context):
 
 
 async def use_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1490,7 +1512,8 @@ async def use_command(update, context):
 
 
 async def ai_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1508,7 +1531,8 @@ async def ai_command(update, context):
 
 
 async def us_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1527,7 +1551,8 @@ async def us_command(update, context):
 
 
 async def uk_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1546,7 +1571,8 @@ async def uk_command(update, context):
 
 
 async def pr_command(update, context):
-    if not is_approved(update.effective_user.id):
+    chat = update.effective_chat
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
@@ -1584,11 +1610,12 @@ ARABIC_COMMANDS = {
 
 async def arabic_command_handler(update, context):
     message = update.effective_message
+    chat = update.effective_chat
 
     if not message or not message.text:
         return
 
-    if not is_approved(update.effective_user.id):
+    if chat.type == "private" and not is_approved(update.effective_user.id):
         return
 
     text = message.text.strip()
@@ -1642,12 +1669,16 @@ async def arabic_command_handler(update, context):
 
 async def normal_message_handler(update, context):
     message = update.effective_message
+    chat = update.effective_chat
 
     if not message or not message.text:
         return
 
     user = update.effective_user
-    if not is_approved(user.id):
+    is_group = chat.type in ["group", "supergroup"]
+
+    # إذا كانت المحادثة في الخاص وليست مجموعة، يشترط أن يكون المستخدم معتمداً
+    if not is_group and not is_approved(user.id):
         return
 
     # 1. التفاعل بالقلب والدعاء عند ذكر الاسم
@@ -1660,8 +1691,6 @@ async def normal_message_handler(update, context):
         await arabic_command_handler(update, context)
         return
 
-    is_group = message.chat.type in ["group", "supergroup"]
-    
     is_reply_to_bot = (
         message.reply_to_message and 
         message.reply_to_message.from_user and 
@@ -1675,7 +1704,7 @@ async def normal_message_handler(update, context):
         await message.reply_text(reply)
         return
 
-    # التصحيح التلقائي في المجموعات: بين كلمة و 20 كلمة بالإنجليزية فقط
+    # التصحيح التلقائي في المجموعات لأي عضو: بين 1 و 20 كلمة بالإنجليزية فقط
     if is_group:
         words = text.split()
         is_english = bool(re.search(r'[A-Za-z]', text)) and not re.search(r'[\u0600-\u06FF]', text)
@@ -1812,7 +1841,7 @@ def main():
     print("=== FixMyEnglish Pro START ===", flush=True)
 
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is missing.")
+        raise RuntimeError("BOT_TOKEN is mention.")
 
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is missing.")
