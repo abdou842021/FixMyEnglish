@@ -5,6 +5,7 @@ import random
 import tempfile
 import threading
 import asyncio
+import time
 from pathlib import Path
 
 from flask import Flask
@@ -1804,7 +1805,7 @@ def build_application():
 
 
 # =========================================================
-# MAIN
+# MAIN (WITH AUTO-RECONNECT LOOP)
 # =========================================================
 
 def main():
@@ -1816,37 +1817,25 @@ def main():
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is missing.")
 
-    print("BOT_TOKEN found:", bool(BOT_TOKEN), flush=True)
-    print("GROQ_API_KEY found:", bool(GROQ_API_KEY), flush=True)
-
-    print("Starting Flask...", flush=True)
-
+    print("Starting Flask background server...", flush=True)
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
     )
     flask_thread.start()
 
-    print("Flask thread started.", flush=True)
-    print("Building Telegram application...", flush=True)
+    print("Starting Telegram application with auto-reconnect wrapper...", flush=True)
 
-    try:
-        application = build_application()
-        print("Telegram application built successfully.", flush=True)
-    except Exception as e:
-        print("BUILD APPLICATION ERROR:", repr(e), flush=True)
-        raise
-
-    print("Starting Telegram polling...", flush=True)
-
-    try:
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-        )
-    except Exception as e:
-        print("POLLING ERROR:", repr(e), flush=True)
-        raise
+    while True:
+        try:
+            application = build_application()
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+            )
+        except Exception as e:
+            print("POLLING ERROR CAUGHT, RESTARTING IN 5 SECONDS:", repr(e), flush=True)
+            time.sleep(5)
 
 
 if __name__ == "__main__":
