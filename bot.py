@@ -141,8 +141,10 @@ def remove_pending(user_id):
 
 def save_vocab(user_id, word):
     uid_str = str(user_id)
+
     if uid_str not in vocab_bank:
         vocab_bank[uid_str] = []
+
     if word not in vocab_bank[uid_str]:
         vocab_bank[uid_str].append(word)
         save_json(VOCAB_FILE, vocab_bank)
@@ -276,7 +278,12 @@ def _ask_groq_sync(prompt, max_tokens=1200, system_prompt=None):
 
 
 async def ask_groq(prompt, max_tokens=1200, system_prompt=None):
-    return await asyncio.to_thread(_ask_groq_sync, prompt, max_tokens, system_prompt)
+    return await asyncio.to_thread(
+        _ask_groq_sync,
+        prompt,
+        max_tokens,
+        system_prompt,
+    )
 
 
 # =========================================================
@@ -576,12 +583,26 @@ async def talk_with_ai(text, user_name):
         "Be natural, witty, joke around if they joke, and act like a real human friend. "
         "Respond mostly in English with a natural conversational flow, and use Arabic when helpful."
     )
-    return await ask_groq(text, 800, system_prompt=sys_prompt)
+
+    return await ask_groq(
+        text,
+        800,
+        system_prompt=sys_prompt,
+    )
 
 
 async def auto_correct_chat(text):
-    prompt = f"Check if this English message has bad grammar or mistakes. If it does, briefly correct it in a friendly way. If it's fine, reply with 'OK'.\nText: {text}"
-    return await ask_groq(prompt, 300)
+    prompt = (
+        "Check if this English message has bad grammar or mistakes. "
+        "If it does, briefly correct it in a friendly way. "
+        "If it's fine, reply with 'OK'.\n"
+        f"Text: {text}"
+    )
+
+    return await ask_groq(
+        prompt,
+        300,
+    )
 
 
 async def pronunciation_info(word, dialect):
@@ -682,15 +703,23 @@ async def make_audio(text, voice):
         await communicate.save(filename)
 
         if not os.path.exists(filename):
-            print("TTS error: audio file was not created.")
+            print(
+                "TTS error: audio file was not created.",
+                flush=True,
+            )
             return None
 
         if os.path.getsize(filename) == 0:
-            print("TTS error: audio file is empty.")
+            print(
+                "TTS error: audio file is empty.",
+                flush=True,
+            )
+
             try:
                 os.remove(filename)
             except Exception:
                 pass
+
             return None
 
         return filename
@@ -737,15 +766,24 @@ async def send_pronunciation(update, word, dialect):
 
     if word_count <= 4:
         if dialect == "US":
-            info = await pronunciation_info(word, "US")
+            info = await pronunciation_info(
+                word,
+                "US",
+            )
         elif dialect == "UK":
-            info = await pronunciation_info(word, "UK")
+            info = await pronunciation_info(
+                word,
+                "UK",
+            )
         else:
             info = await both_pronunciation(word)
 
         await message.reply_text(info)
 
-    audio = await make_audio(word, voice)
+    audio = await make_audio(
+        word,
+        voice,
+    )
 
     if not audio:
         await message.reply_text(
@@ -759,17 +797,29 @@ async def send_pronunciation(update, word, dialect):
                 audio=f,
                 caption="🔊 Pronunciation",
             )
+
     except Exception as e:
-        print("Telegram audio error:", repr(e), flush=True)
+        print(
+            "Telegram audio error:",
+            repr(e),
+            flush=True,
+        )
+
         await message.reply_text(
             "❌ I couldn't send the pronunciation audio."
         )
+
     finally:
         try:
             if os.path.exists(audio):
                 os.remove(audio)
+
         except Exception as e:
-            print("Audio cleanup error:", repr(e), flush=True)
+            print(
+                "Audio cleanup error:",
+                repr(e),
+                flush=True,
+            )
 
 
 # =========================================================
@@ -948,8 +998,13 @@ async def name_reaction(update, context):
                 ReactionTypeEmoji("❤️")
             ],
         )
+
     except Exception as e:
-        print("Reaction error:", repr(e), flush=True)
+        print(
+            "Reaction error:",
+            repr(e),
+            flush=True,
+        )
 
     await message.reply_text(
         random.choice(DUAS)
@@ -1075,7 +1130,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
     await update.effective_message.reply_text(
@@ -1087,35 +1145,59 @@ async def help_command(update, context):
 async def talk_command(update, context):
     user = update.effective_user
     chat = update.effective_chat
+
     if chat.type == "private" and not is_approved(user.id):
         return
 
     if user.id in talk_mode_users:
         talk_mode_users.remove(user.id)
-        await update.effective_message.reply_text("💤 Talk mode disabled.")
+
+        await update.effective_message.reply_text(
+            "💤 Talk mode disabled."
+        )
+
     else:
         talk_mode_users.add(user.id)
+
         greetings = [
             f"Hey {user.first_name}! What's on your mind today, my friend?",
             f"Yo! Ready to chat or practice some English, {user.first_name}?",
             f"Hello there! Let's talk about whatever you want, bro.",
         ]
-        await update.effective_message.reply_text(random.choice(greetings))
+
+        await update.effective_message.reply_text(
+            random.choice(greetings)
+        )
 
 
 async def vocab_command(update, context):
     user = update.effective_user
     chat = update.effective_chat
+
     if chat.type == "private" and not is_approved(user.id):
         return
 
     uid_str = str(user.id)
     words = vocab_bank.get(uid_str, [])
+
     if not words:
-        await update.effective_message.reply_text("📭 Your vocabulary bank is empty.")
+        await update.effective_message.reply_text(
+            "📭 Your vocabulary bank is empty."
+        )
         return
-    text = "📚 <b>Your Saved Words:</b>\n\n" + "\n".join(f"• {w}" for w in words)
-    await update.effective_message.reply_text(text, parse_mode="HTML")
+
+    text = (
+        "📚 <b>Your Saved Words:</b>\n\n"
+        + "\n".join(
+            f"• {w}"
+            for w in words
+        )
+    )
+
+    await update.effective_message.reply_text(
+        text,
+        parse_mode="HTML",
+    )
 
 
 # =========================================================
@@ -1129,6 +1211,7 @@ async def notify_owner(update, user):
 
     try:
         name = user.full_name or "Unknown"
+
         username = (
             f"@{user.username}"
             if user.username
@@ -1162,7 +1245,11 @@ async def notify_owner(update, user):
         )
 
     except Exception as e:
-        print("Notify owner error:", repr(e))
+        print(
+            "Notify owner error:",
+            repr(e),
+            flush=True,
+        )
 
 
 async def context_bot_send(update, text, keyboard):
@@ -1198,6 +1285,7 @@ async def access_callback(update, context):
 
     try:
         user_id = int(user_id_text)
+
     except ValueError:
         return
 
@@ -1215,8 +1303,13 @@ async def access_callback(update, context):
                 chat_id=user_id,
                 text="✅ Your access to FixMyEnglish has been approved!",
             )
+
         except Exception as e:
-            print("Approval message error:", repr(e))
+            print(
+                "Approval message error:",
+                repr(e),
+                flush=True,
+            )
 
     elif action == "reject":
         remove_pending(user_id)
@@ -1231,8 +1324,13 @@ async def access_callback(update, context):
                 chat_id=user_id,
                 text="❌ Your access request was not approved.",
             )
+
         except Exception as e:
-            print("Reject message error:", repr(e))
+            print(
+                "Reject message error:",
+                repr(e),
+                flush=True,
+            )
 
 
 # =========================================================
@@ -1245,13 +1343,17 @@ def extract_user_id(message):
     if not target:
         return None
 
-    match = re.search(r"-?\d+", target)
+    match = re.search(
+        r"-?\d+",
+        target,
+    )
 
     if not match:
         return None
 
     try:
         return int(match.group())
+
     except ValueError:
         return None
 
@@ -1260,7 +1362,9 @@ async def add_command(update, context):
     if not is_owner(update.effective_user.id):
         return
 
-    user_id = extract_user_id(update.effective_message)
+    user_id = extract_user_id(
+        update.effective_message
+    )
 
     if user_id is None:
         await update.effective_message.reply_text(
@@ -1282,7 +1386,9 @@ async def del_command(update, context):
     if not is_owner(update.effective_user.id):
         return
 
-    user_id = extract_user_id(update.effective_message)
+    user_id = extract_user_id(
+        update.effective_message
+    )
 
     if user_id is None:
         await update.effective_message.reply_text(
@@ -1332,7 +1438,9 @@ async def approve_command(update, context):
     if not is_owner(update.effective_user.id):
         return
 
-    user_id = extract_user_id(update.effective_message)
+    user_id = extract_user_id(
+        update.effective_message
+    )
 
     if user_id is None:
         await update.effective_message.reply_text(
@@ -1352,15 +1460,22 @@ async def approve_command(update, context):
             chat_id=user_id,
             text="✅ Your access has been approved!",
         )
+
     except Exception as e:
-        print("Approval message error:", repr(e))
+        print(
+            "Approval message error:",
+            repr(e),
+            flush=True,
+        )
 
 
 async def reject_command(update, context):
     if not is_owner(update.effective_user.id):
         return
 
-    user_id = extract_user_id(update.effective_message)
+    user_id = extract_user_id(
+        update.effective_message
+    )
 
     if user_id is None:
         await update.effective_message.reply_text(
@@ -1393,10 +1508,15 @@ async def stats_command(update, context):
 
 async def tr_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1413,10 +1533,15 @@ async def tr_command(update, context):
 
 async def cor_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1432,10 +1557,15 @@ async def cor_command(update, context):
 
 async def ex_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1443,7 +1573,11 @@ async def ex_command(update, context):
         )
         return
 
-    save_vocab(update.effective_user.id, text)
+    save_vocab(
+        update.effective_user.id,
+        text,
+    )
+
     await send_long_reply(
         update,
         await explain_text(text),
@@ -1452,10 +1586,15 @@ async def ex_command(update, context):
 
 async def syn_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1471,10 +1610,15 @@ async def syn_command(update, context):
 
 async def ant_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1490,10 +1634,15 @@ async def ant_command(update, context):
 
 async def use_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1509,10 +1658,15 @@ async def use_command(update, context):
 
 async def ai_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1528,10 +1682,15 @@ async def ai_command(update, context):
 
 async def us_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1548,10 +1707,15 @@ async def us_command(update, context):
 
 async def uk_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1568,10 +1732,15 @@ async def uk_command(update, context):
 
 async def pr_command(update, context):
     chat = update.effective_chat
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
-    text = get_target_text(update.effective_message)
+    text = get_target_text(
+        update.effective_message
+    )
 
     if not text:
         await update.effective_message.reply_text(
@@ -1611,7 +1780,9 @@ async def arabic_command_handler(update, context):
     if not message or not message.text:
         return
 
-    if chat.type == "private" and not is_approved(update.effective_user.id):
+    if chat.type == "private" and not is_approved(
+        update.effective_user.id
+    ):
         return
 
     text = message.text.strip()
@@ -1622,6 +1793,7 @@ async def arabic_command_handler(update, context):
         return
 
     action = ARABIC_COMMANDS[command]
+
     argument = (
         parts[1].strip()
         if len(parts) == 2
@@ -1629,7 +1801,10 @@ async def arabic_command_handler(update, context):
     )
 
     if action == "talk":
-        await talk_command(update, context)
+        await talk_command(
+            update,
+            context,
+        )
         return
 
     if not argument:
@@ -1639,24 +1814,66 @@ async def arabic_command_handler(update, context):
         return
 
     if action == "tr":
-        await send_long_reply(update, await translate_text(argument))
+        await send_long_reply(
+            update,
+            await translate_text(argument),
+        )
+
     elif action == "cor":
-        await send_long_reply(update, await correct_text(argument))
+        await send_long_reply(
+            update,
+            await correct_text(argument),
+        )
+
     elif action == "ex":
-        save_vocab(update.effective_user.id, argument)
-        await send_long_reply(update, await explain_text(argument))
+        save_vocab(
+            update.effective_user.id,
+            argument,
+        )
+
+        await send_long_reply(
+            update,
+            await explain_text(argument),
+        )
+
     elif action == "syn":
-        await send_long_reply(update, await synonyms_text(argument))
+        await send_long_reply(
+            update,
+            await synonyms_text(argument),
+        )
+
     elif action == "ant":
-        await send_long_reply(update, await antonyms_text(argument))
+        await send_long_reply(
+            update,
+            await antonyms_text(argument),
+        )
+
     elif action == "use":
-        await send_long_reply(update, await use_word(argument))
+        await send_long_reply(
+            update,
+            await use_word(argument),
+        )
+
     elif action == "us":
-        await send_pronunciation(update, argument, "US")
+        await send_pronunciation(
+            update,
+            argument,
+            "US",
+        )
+
     elif action == "uk":
-        await send_pronunciation(update, argument, "UK")
+        await send_pronunciation(
+            update,
+            argument,
+            "UK",
+        )
+
     elif action == "pr":
-        await send_pronunciation(update, argument, "BOTH")
+        await send_pronunciation(
+            update,
+            argument,
+            "BOTH",
+        )
 
 
 # =========================================================
@@ -1671,43 +1888,79 @@ async def normal_message_handler(update, context):
         return
 
     user = update.effective_user
-    is_group = chat.type in ["group", "supergroup"]
+    is_group = chat.type in [
+        "group",
+        "supergroup",
+    ]
 
-    # في الخاص فقط: نتحقق من الاعتماد. أما في المجموعات فيعمل للجميع
+    # في الخاص فقط: نتحقق من الاعتماد.
+    # أما في المجموعات فيعمل للجميع
     if not is_group and not is_approved(user.id):
         return
 
     # 1. التفاعل بالقلب والدعاء عند ذكر الاسم
-    await name_reaction(update, context)
+    await name_reaction(
+        update,
+        context,
+    )
 
     text = message.text.strip()
-    first_word = text.split(maxsplit=1)[0].lower()
+    first_word = text.split(
+        maxsplit=1
+    )[0].lower()
 
     if first_word in ARABIC_COMMANDS:
-        await arabic_command_handler(update, context)
+        await arabic_command_handler(
+            update,
+            context,
+        )
         return
 
     is_reply_to_bot = (
-        message.reply_to_message and 
-        message.reply_to_message.from_user and 
-        message.reply_to_message.from_user.id == context.bot.id
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id
+        == context.bot.id
     )
 
     if user.id in talk_mode_users:
         if is_group and not is_reply_to_bot:
             return
-        reply = await talk_with_ai(text, user.first_name)
+
+        reply = await talk_with_ai(
+            text,
+            user.first_name,
+        )
+
         await message.reply_text(reply)
         return
 
-    # التصحيح التلقائي في المجموعات لأي عضو: بين 1 و 20 كلمة بالإنجليزية فقط
+    # التصحيح التلقائي في المجموعات لأي عضو:
+    # بين 1 و 20 كلمة بالإنجليزية فقط
     if is_group:
         words = text.split()
-        is_english = bool(re.search(r'[A-Za-z]', text)) and not re.search(r'[\u0600-\u06FF]', text)
+
+        is_english = (
+            bool(re.search(r'[A-Za-z]', text))
+            and not re.search(
+                r'[\u0600-\u06FF]',
+                text,
+            )
+        )
+
         if is_english and 1 <= len(words) <= 20:
-            correction = await auto_correct_chat(text)
-            if correction and correction.strip().lower() not in {"ok", "ok."}:
-                await message.reply_text(f"💡 Correction hint:\n{correction}")
+            correction = await auto_correct_chat(
+                text
+            )
+
+            if (
+                correction
+                and correction.strip().lower()
+                not in {"ok", "ok."}
+            ):
+                await message.reply_text(
+                    f"💡 Correction hint:\n{correction}"
+                )
 
 
 # =========================================================
@@ -1715,7 +1968,11 @@ async def normal_message_handler(update, context):
 # =========================================================
 
 async def error_handler(update, context):
-    print("Telegram error:", repr(context.error))
+    print(
+        "Telegram error:",
+        repr(context.error),
+        flush=True,
+    )
 
 
 # =========================================================
@@ -1755,7 +2012,7 @@ def run_flask():
 # TELEGRAM COMMAND MENU
 # =========================================================
 
-async def post_init(application):
+async def set_command_menu(application):
     try:
         await application.bot.set_my_commands(
             [
@@ -1773,10 +2030,32 @@ async def post_init(application):
                 ("uk", "British pronunciation"),
                 ("pr", "Both pronunciations"),
                 ("ai", "Ask AI"),
-            ]
+            ],
+            read_timeout=10,
+            write_timeout=10,
+            connect_timeout=10,
+            pool_timeout=10,
         )
+
+        print(
+            "Telegram command menu set successfully.",
+            flush=True,
+        )
+
     except Exception as e:
-        print("Command menu error:", repr(e))
+        print(
+            "Command menu error:",
+            repr(e),
+            flush=True,
+        )
+
+
+async def post_init(application):
+    # إعداد قائمة الأوامر في الخلفية
+    # حتى لا يمنع تشغيل Telegram polling
+    application.create_task(
+        set_command_menu(application)
+    )
 
 
 # =========================================================
@@ -1791,31 +2070,151 @@ def build_application():
         .build()
     )
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("talk", talk_command))
-    application.add_handler(CommandHandler("vocab", vocab_command))
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start,
+        )
+    )
 
-    application.add_handler(CommandHandler("tr", tr_command))
-    application.add_handler(CommandHandler("cor", cor_command))
-    application.add_handler(CommandHandler("ex", ex_command))
-    application.add_handler(CommandHandler("syn", syn_command))
-    application.add_handler(CommandHandler("ant", ant_command))
-    application.add_handler(CommandHandler("use", use_command))
-    application.add_handler(CommandHandler("ai", ai_command))
+    application.add_handler(
+        CommandHandler(
+            "help",
+            help_command,
+        )
+    )
 
-    application.add_handler(CommandHandler("us", us_command))
-    application.add_handler(CommandHandler("uk", uk_command))
-    application.add_handler(CommandHandler("pr", pr_command))
+    application.add_handler(
+        CommandHandler(
+            "talk",
+            talk_command,
+        )
+    )
 
-    application.add_handler(CommandHandler("add", add_command))
-    application.add_handler(CommandHandler("del", del_command))
-    application.add_handler(CommandHandler("list", list_command))
-    application.add_handler(CommandHandler("approve", approve_command))
-    application.add_handler(CommandHandler("reject", reject_command))
-    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(
+        CommandHandler(
+            "vocab",
+            vocab_command,
+        )
+    )
 
-    application.add_handler(CallbackQueryHandler(access_callback))
+    application.add_handler(
+        CommandHandler(
+            "tr",
+            tr_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "cor",
+            cor_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ex",
+            ex_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "syn",
+            syn_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ant",
+            ant_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "use",
+            use_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "ai",
+            ai_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "us",
+            us_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "uk",
+            uk_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "pr",
+            pr_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "add",
+            add_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "del",
+            del_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "list",
+            list_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "approve",
+            approve_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "reject",
+            reject_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "stats",
+            stats_command,
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            access_callback
+        )
+    )
 
     application.add_handler(
         MessageHandler(
@@ -1824,7 +2223,9 @@ def build_application():
         )
     )
 
-    application.add_error_handler(error_handler)
+    application.add_error_handler(
+        error_handler
+    )
 
     return application
 
@@ -1834,44 +2235,88 @@ def build_application():
 # =========================================================
 
 def main():
-    print("=== FixMyEnglish Pro START ===", flush=True)
+    print(
+        "=== FixMyEnglish Pro START ===",
+        flush=True,
+    )
 
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is missing.")
+        raise RuntimeError(
+            "BOT_TOKEN is missing."
+        )
 
     if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is missing.")
+        raise RuntimeError(
+            "GROQ_API_KEY is missing."
+        )
 
-    print("BOT_TOKEN found:", bool(BOT_TOKEN), flush=True)
-    print("GROQ_API_KEY found:", bool(GROQ_API_KEY), flush=True)
+    print(
+        "BOT_TOKEN found:",
+        bool(BOT_TOKEN),
+        flush=True,
+    )
 
-    print("Starting Flask...", flush=True)
+    print(
+        "GROQ_API_KEY found:",
+        bool(GROQ_API_KEY),
+        flush=True,
+    )
+
+    print(
+        "Starting Flask...",
+        flush=True,
+    )
 
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
     )
+
     flask_thread.start()
 
-    print("Flask thread started.", flush=True)
-    print("Building Telegram application...", flush=True)
+    print(
+        "Flask thread started.",
+        flush=True,
+    )
+
+    print(
+        "Building Telegram application...",
+        flush=True,
+    )
 
     try:
         application = build_application()
-        print("Telegram application built successfully.", flush=True)
+
+        print(
+            "Telegram application built successfully.",
+            flush=True,
+        )
+
     except Exception as e:
-        print("BUILD APPLICATION ERROR:", repr(e), flush=True)
+        print(
+            "BUILD APPLICATION ERROR:",
+            repr(e),
+            flush=True,
+        )
         raise
 
-    print("Starting Telegram polling...", flush=True)
+    print(
+        "Starting Telegram polling...",
+        flush=True,
+    )
 
     try:
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
         )
+
     except Exception as e:
-        print("POLLING ERROR:", repr(e), flush=True)
+        print(
+            "POLLING ERROR:",
+            repr(e),
+            flush=True,
+        )
         raise
 
 
