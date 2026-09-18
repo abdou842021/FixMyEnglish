@@ -849,7 +849,6 @@ DUAS = [
     "🤲 May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
     "🤲 May Allah give you the strength to keep learning even when progress seems slow.",
     "🤲 May Allah reward your patience and make the fruits of your efforts greater than you expect.",
-    "Commands..."
     "🤲 May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
     "🤲 May Allah put barakah in everything beneficial that you learn and teach.",
     "🤲 May Allah make your words beneficial, your actions sincere, and your intentions pure.",
@@ -890,7 +889,6 @@ DUAS = [
     "🤲 May Allah make your learning a source of confidence, humility, and positive change.",
     "🤲 May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
     "🤲 May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
-    "🤲,
     "🤲 May Allah make your efforts meaningful, your progress steady, and your future blessed.",
     "🤲 May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
     "🤲 May Allah bless every good intention in your heart and every sincere effort you make.",
@@ -1039,15 +1037,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or not chat:
         return
 
-    # إذا كان في المجموعة، يعمل فوراً للجميع بدون موافقة
     if chat.type in ["group", "supergroup"]:
         await update.effective_message.reply_text(
-            "👋 Hello everyone in the group! <b>FixMyEnglish Pro</b> is active and ready to help you with English.",
+            "👋 Hello! <b>FixMyEnglish Pro</b> is active in this group and ready to help everyone.",
             parse_mode="HTML",
         )
         return
 
-    # في الخاص: يحتاج موافقة
     if not is_approved(user.id):
         add_pending(user.id)
 
@@ -1677,7 +1673,7 @@ async def normal_message_handler(update, context):
     user = update.effective_user
     is_group = chat.type in ["group", "supergroup"]
 
-    # إذا كانت المحادثة في الخاص وليست مجموعة، يشترط أن يكون المستخدم معتمداً
+    # في الخاص فقط: نتحقق من الاعتماد. أما في المجموعات فيعمل للجميع
     if not is_group and not is_approved(user.id):
         return
 
@@ -1834,37 +1830,49 @@ def build_application():
 
 
 # =========================================================
-# MAIN (WITH AUTO-RECONNECT LOOP)
+# MAIN
 # =========================================================
 
 def main():
     print("=== FixMyEnglish Pro START ===", flush=True)
 
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is mention.")
+        raise RuntimeError("BOT_TOKEN is missing.")
 
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is missing.")
 
-    print("Starting Flask background server...", flush=True)
+    print("BOT_TOKEN found:", bool(BOT_TOKEN), flush=True)
+    print("GROQ_API_KEY found:", bool(GROQ_API_KEY), flush=True)
+
+    print("Starting Flask...", flush=True)
+
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
     )
     flask_thread.start()
 
-    print("Starting Telegram application with auto-reconnect wrapper...", flush=True)
+    print("Flask thread started.", flush=True)
+    print("Building Telegram application...", flush=True)
 
-    while True:
-        try:
-            application = build_application()
-            application.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-            )
-        except Exception as e:
-            print("POLLING ERROR CAUGHT, RESTARTING IN 5 SECONDS:", repr(e), flush=True)
-            time.sleep(5)
+    try:
+        application = build_application()
+        print("Telegram application built successfully.", flush=True)
+    except Exception as e:
+        print("BUILD APPLICATION ERROR:", repr(e), flush=True)
+        raise
+
+    print("Starting Telegram polling...", flush=True)
+
+    try:
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    except Exception as e:
+        print("POLLING ERROR:", repr(e), flush=True)
+        raise
 
 
 if __name__ == "__main__":
