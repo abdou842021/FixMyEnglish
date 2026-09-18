@@ -47,10 +47,14 @@ UK_VOICE = "en-GB-SoniaNeural"
 
 USERS_FILE = Path("users.json")
 PENDING_FILE = Path("pending_users.json")
+VOCAB_FILE = Path("vocab_bank.json")
 
 app = Flask(__name__)
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+json_lock = threading.Lock()
+talk_mode_users = set()
 
 
 # =========================================================
@@ -58,31 +62,34 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # =========================================================
 
 def load_json(path, default):
-    try:
-        if not path.exists():
+    with json_lock:
+        try:
+            if not path.exists():
+                return default
+
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            return data
+
+        except Exception as e:
+            print("Load JSON error:", repr(e))
             return default
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        return data
-
-    except Exception as e:
-        print("Load JSON error:", repr(e))
-        return default
 
 
 def save_json(path, data):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    with json_lock:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
 
-    except Exception as e:
-        print("Save JSON error:", repr(e))
+        except Exception as e:
+            print("Save JSON error:", repr(e))
 
 
 approved_users = load_json(USERS_FILE, [])
 pending_users = load_json(PENDING_FILE, [])
+vocab_bank = load_json(VOCAB_FILE, {})
 
 approved_users = [
     int(x) for x in approved_users
@@ -129,6 +136,15 @@ def remove_pending(user_id):
     if user_id in pending_users:
         pending_users.remove(user_id)
         save_json(PENDING_FILE, pending_users)
+
+
+def save_vocab(user_id, word):
+    uid_str = str(user_id)
+    if uid_str not in vocab_bank:
+        vocab_bank[uid_str] = []
+    if word not in vocab_bank[uid_str]:
+        vocab_bank[uid_str].append(word)
+        save_json(VOCAB_FILE, vocab_bank)
 
 
 # =========================================================
@@ -212,27 +228,29 @@ async def send_long_reply(update, text):
 
 
 # =========================================================
-# GROQ
+# GROQ ASYNC WRAPPER
 # =========================================================
 
-def ask_groq(prompt, max_tokens=1200):
+def _ask_groq_sync(prompt, max_tokens=1200, system_prompt=None):
 
     if not groq_client:
         return "❌ GROQ_API_KEY is not configured."
 
     try:
+        sys_msg = system_prompt or (
+            "You are FixMyEnglish, an accurate English-learning "
+            "assistant for Arabic-speaking learners. "
+            "Be clear, natural, concise, and educational. "
+            "Use Arabic when explaining English to an Arabic speaker. "
+            "Never reveal internal reasoning."
+        )
+
         response = groq_client.chat.completions.create(
             model=MODEL,
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are FixMyEnglish, an accurate English-learning "
-                        "assistant for Arabic-speaking learners. "
-                        "Be clear, natural, concise, and educational. "
-                        "Use Arabic when explaining English to an Arabic speaker. "
-                        "Never reveal internal reasoning."
-                    ),
+                    "content": sys_msg,
                 },
                 {
                     "role": "user",
@@ -256,12 +274,16 @@ def ask_groq(prompt, max_tokens=1200):
         return "❌ AI request failed. Please try again."
 
 
+async def ask_groq(prompt, max_tokens=1200, system_prompt=None):
+    return await asyncio.to_thread(_ask_groq_sync, prompt, max_tokens, system_prompt)
+
+
 # =========================================================
 # LANGUAGE FUNCTIONS
 # =========================================================
 
-def translate_text(text):
-    return ask_groq(
+async def translate_text(text):
+    return await ask_groq(
         f"""
 Translate this text.
 
@@ -282,8 +304,8 @@ Text:
 # AI FUNCTIONS — ORGANIZED ANSWERS
 # =========================================================
 
-def correct_text(text):
-    return ask_groq(
+async def correct_text(text):
+    return await ask_groq(
         f"""
 Correct this English text for an Arabic-speaking learner.
 
@@ -320,8 +342,8 @@ Text:
     )
 
 
-def explain_text(text):
-    return ask_groq(
+async def explain_text(text):
+    return await ask_groq(
         f"""
 Explain this English word or expression to an Arabic-speaking learner.
 
@@ -366,12 +388,12 @@ Rules:
 Word/expression:
 {text}
 """,
-        1200,
+        1100,
     )
 
 
-def synonyms_text(text):
-    return ask_groq(
+async def synonyms_text(text):
+    return await ask_groq(
         f"""
 Give useful synonyms and antonyms for this English word.
 
@@ -423,8 +445,8 @@ Word:
     )
 
 
-def antonyms_text(text):
-    return ask_groq(
+async def antonyms_text(text):
+    return await ask_groq(
         f"""
 Give useful antonyms for this English word.
 
@@ -466,8 +488,8 @@ Word:
     )
 
 
-def use_word(text):
-    return ask_groq(
+async def use_word(text):
+    return await ask_groq(
         f"""
 Explain how to use this English word or expression naturally.
 
@@ -508,8 +530,8 @@ Word:
     )
 
 
-def free_ai(text):
-    return ask_groq(
+async def free_ai(text):
+    return await ask_groq(
         f"""
 Answer the user's request directly and accurately.
 
@@ -547,7 +569,21 @@ User request:
     )
 
 
-def pronunciation_info(word, dialect):
+async def talk_with_ai(text, user_name):
+    sys_prompt = (
+        f"You are a realistic, casual, and friendly English companion chatting with {user_name}. "
+        "Be natural, witty, joke around if they joke, and act like a real human friend. "
+        "Respond mostly in English with a natural conversational flow, and use Arabic when helpful."
+    )
+    return await ask_groq(text, 800, system_prompt=sys_prompt)
+
+
+async def auto_correct_chat(text):
+    prompt = f"Check if this English message has bad grammar or mistakes. If it does, briefly correct it in a friendly way. If it's fine, reply with 'OK'.\nText: {text}"
+    return await ask_groq(prompt, 300)
+
+
+async def pronunciation_info(word, dialect):
 
     if dialect == "US":
         name = "American English"
@@ -556,7 +592,7 @@ def pronunciation_info(word, dialect):
         name = "British English"
         flag = "🇬🇧"
 
-    return ask_groq(
+    return await ask_groq(
         f"""
 Give accurate pronunciation information for this English word
 in {name}.
@@ -589,8 +625,8 @@ Word:
     )
 
 
-def both_pronunciation(word):
-    return ask_groq(
+async def both_pronunciation(word):
+    return await ask_groq(
         f"""
 Give accurate pronunciation information for this English word.
 
@@ -625,73 +661,6 @@ Word:
     )
 
 
-
-
-
-
-
-def pronunciation_info(word, dialect):
-
-    if dialect == "US":
-        name = "American English"
-        flag = "🇺🇸"
-    else:
-        name = "British English"
-        flag = "🇬🇧"
-
-    return ask_groq(
-        f"""
-Give accurate pronunciation information for this English word
-in {name}.
-
-Return:
-
-Word: {word}
-{flag} IPA: [IPA]
-
-🇩🇿 Arabic meaning:
-...
-
-Other common meanings if applicable:
-...
-
-Only give pronunciation for this word.
-Use standard IPA.
-
-Word:
-{word}
-""",
-        700,
-    )
-
-
-def both_pronunciation(word):
-    return ask_groq(
-        f"""
-Give accurate pronunciation for this English word.
-
-Return exactly:
-
-{word}
-
-🇺🇸 [American IPA]
-🇬🇧 [British IPA]
-
-🇩🇿 Arabic meaning:
-...
-
-Only give IPA for the word.
-
-Word:
-{word}
-""",
-        700,
-    )
-
-
-# =========================================================
-# TEXT TO SPEECH
-# ========================================================
 # =========================================================
 # TEXT TO SPEECH
 # =========================================================
@@ -701,11 +670,9 @@ async def make_audio(text, voice):
     filename = None
 
     try:
-        # Create temporary MP3 file
         fd, filename = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
 
-        # Generate speech
         communicate = edge_tts.Communicate(
             text=text,
             voice=voice,
@@ -713,30 +680,22 @@ async def make_audio(text, voice):
 
         await communicate.save(filename)
 
-        # Make sure the file exists and is not empty
         if not os.path.exists(filename):
             print("TTS error: audio file was not created.")
             return None
 
         if os.path.getsize(filename) == 0:
             print("TTS error: audio file is empty.")
-
             try:
                 os.remove(filename)
             except Exception:
                 pass
-
             return None
 
         return filename
 
     except Exception as e:
-
-        print(
-            "TTS error:",
-            repr(e),
-            flush=True,
-        )
+        print("TTS error:", repr(e), flush=True)
 
         if filename:
             try:
@@ -759,362 +718,187 @@ async def send_pronunciation(update, word, dialect):
     if not word:
         return
 
-    # Count words
     word_count = len(word.split())
 
-    # Maximum: 700 words
     if word_count > 700:
-
         await message.reply_text(
             "❌ The text is too long for pronunciation.\n"
             "The maximum is 700 words."
         )
-
         return
 
-    # Select voice
     if dialect == "US":
         voice = US_VOICE
-
     elif dialect == "UK":
         voice = UK_VOICE
-
     else:
-        # /pr = use American voice for audio
         voice = US_VOICE
 
-    # =====================================================
-    # 1–4 WORDS
-    # Phonetics + audio
-    # =====================================================
-
     if word_count <= 4:
-
         if dialect == "US":
-
-            info = pronunciation_info(
-                word,
-                "US",
-            )
-
+            info = await pronunciation_info(word, "US")
         elif dialect == "UK":
-
-            info = pronunciation_info(
-                word,
-                "UK",
-            )
-
+            info = await pronunciation_info(word, "UK")
         else:
+            info = await both_pronunciation(word)
 
-            info = both_pronunciation(
-                word,
-            )
+        await message.reply_text(info)
 
-        await message.reply_text(
-            info,
-        )
-
-    # =====================================================
-    # AUDIO
-    # 1–700 WORDS
-    # =====================================================
-
-    audio = await make_audio(
-        word,
-        voice,
-    )
+    audio = await make_audio(word, voice)
 
     if not audio:
-
         await message.reply_text(
             "❌ I couldn't create the pronunciation audio."
         )
-
         return
 
     try:
-
-        # IMPORTANT:
-        # edge-tts creates MP3.
-        # Therefore use reply_audio, NOT reply_voice.
-
         with open(audio, "rb") as f:
-
             await message.reply_audio(
                 audio=f,
                 caption="🔊 Pronunciation",
             )
-
     except Exception as e:
-
-        print(
-            "Telegram audio error:",
-            repr(e),
-            flush=True,
-        )
-
+        print("Telegram audio error:", repr(e), flush=True)
         await message.reply_text(
             "❌ I couldn't send the pronunciation audio."
         )
-
     finally:
-
         try:
             if os.path.exists(audio):
                 os.remove(audio)
-
         except Exception as e:
+            print("Audio cleanup error:", repr(e), flush=True)
 
-            print(
-                "Audio cleanup error:",
-                repr(e),
-                flush=True,
-            )
 
 # =========================================================
-# DUAS
+# DUAS (ALL 100+ DUAS)
 # =========================================================
 
 DUAS = [
-
     "🤲 May Allah bless you with beneficial knowledge, wisdom, and success.",
-
     "🤲 May Allah increase you in knowledge, understanding, and goodness.",
-
     "🤲 May Allah open the doors of beneficial knowledge for you.",
-
     "🤲 May Allah bless your time, your efforts, and everything you learn.",
-
     "🤲 May Allah guide you to what is good and make your path easy.",
-
     "🤲 May Allah grant you knowledge that benefits you and benefits others.",
-
     "🤲 May Allah increase you in faith, knowledge, wisdom, and good character.",
-
     "🤲 May Allah make your journey toward knowledge full of blessings and success.",
-
     "🤲 May Allah make every difficulty easy for you and every good effort fruitful.",
-
     "🤲 May Allah bless your mind with understanding and your heart with peace.",
-
     "🤲 May Allah grant you clarity, patience, and success in all that is good.",
-
     "🤲 May Allah make your knowledge a source of benefit in this life and the Hereafter.",
-
     "🤲 May Allah bless you with sincere intentions and beneficial actions.",
-
     "🤲 May Allah increase you in wisdom and guide you to the best choices.",
-
     "🤲 May Allah make learning easy for you and put barakah in your efforts.",
-
     "🤲 May Allah grant you success beyond what you expect and goodness beyond what you imagine.",
-
     "🤲 May Allah protect you, guide you, and surround you with His mercy.",
-
     "🤲 May Allah grant you a heart full of gratitude, patience, and peace.",
-
     "🤲 May Allah bless every step you take toward knowledge and righteousness.",
-
     "🤲 May Allah make your efforts sincere, your knowledge beneficial, and your path blessed.",
-
     "🤲 May Allah open for you doors of understanding that you never expected.",
-
     "🤲 May Allah grant you strength when learning is difficult and patience when progress is slow.",
-
     "🤲 May Allah put light in your heart, clarity in your mind, and barakah in your time.",
-
     "🤲 May Allah make you a source of benefit and goodness wherever you go.",
-
     "🤲 May Allah grant you success in your studies and bless you with lasting knowledge.",
-
     "🤲 May Allah make your pursuit of knowledge a means of drawing closer to Him.",
-
     "🤲 May Allah reward your efforts, forgive your shortcomings, and increase you in goodness.",
-
     "🤲 May Allah grant you beneficial knowledge, lawful provision, good health, and a peaceful heart.",
-
     "🤲 May Allah guide you whenever you are uncertain and strengthen you whenever you struggle.",
-
     "🤲 May Allah bless your future and make it better than you hope.",
-
     "🤲 May Allah grant you excellence in what you learn and wisdom in how you use it.",
-
     "🤲 May Allah make every page you read and every word you learn a source of benefit.",
-
     "🤲 May Allah bless your memory, strengthen your understanding, and make learning easy for you.",
-
     "🤲 May Allah grant you patience with yourself and consistency in seeking knowledge.",
-
     "🤲 May Allah give you the ability to understand, remember, and apply beneficial knowledge.",
-
     "🤲 May Allah make your knowledge a light for you and a benefit to those around you.",
-
     "🤲 May Allah bless your dreams, guide your steps, and grant you what is best for you.",
-
     "🤲 May Allah replace every difficulty with ease and every worry with peace.",
-
     "🤲 May Allah grant you sincerity in your intentions and excellence in your actions.",
-
     "🤲 May Allah keep you steadfast upon goodness and guide you to what pleases Him.",
-
     "🤲 May Allah bless your journey, protect you from harm, and grant you a beautiful future.",
-
     "🤲 May Allah grant you courage to continue, patience to persevere, and wisdom to learn.",
-
     "🤲 May Allah make your efforts today a reason for greater blessings tomorrow.",
-
     "🤲 May Allah grant you success in this world and lasting success in the Hereafter.",
-
     "🤲 May Allah fill your life with beneficial knowledge, righteous deeds, and peaceful moments.",
-
     "🤲 May Allah guide your heart, enlighten your mind, and bless your endeavors.",
-
     "🤲 May Allah grant you the best of what you seek and protect you from what harms you.",
-
     "🤲 May Allah make you among those who learn, understand, practice, and teach what is good.",
-
     "🤲 May Allah bless you with good companions, beneficial knowledge, and a righteous path.",
-
     "🤲 May Allah make your future bright with faith, knowledge, goodness, and success.",
-
     "🤲 May Allah give you strength to overcome every obstacle and wisdom to learn from every experience.",
-
     "🤲 May Allah grant you peace in your heart, clarity in your thoughts, and blessings in your life.",
-
     "🤲 May Allah make every sincere effort you make a reason for reward and goodness.",
-
     "🤲 May Allah grant you a beautiful character, beneficial knowledge, and a heart attached to goodness.",
-
     "🤲 May Allah protect your heart from despair and fill it with hope, patience, and trust in Him.",
-
     "🤲 May Allah bless you with opportunities that bring you closer to what is good.",
-
     "🤲 May Allah make your learning journey enjoyable, beneficial, and full of barakah.",
-
     "🤲 May Allah grant you understanding deeper than memorization and wisdom greater than information.",
-
     "🤲 May Allah bless what you know, teach you what you do not know, and benefit you through both.",
-
     "🤲 May Allah make your knowledge a means of helping yourself, your family, and your community.",
-
     "🤲 May Allah grant you steadfastness when the road is difficult and gratitude when it becomes easy.",
-
     "🤲 May Allah open your heart to knowledge and make you among those who act upon what they learn.",
-
     "🤲 May Allah bless your days with purpose, your nights with peace, and your efforts with success.",
-
     "🤲 May Allah grant you what is good for you, even when you do not know what is best for yourself.",
-
     "🤲 May Allah guide you toward people and opportunities that bring goodness into your life.",
-
     "🤲 May Allah make your knowledge increase your humility, your wisdom, and your kindness.",
-
     "🤲 May Allah grant you success in every beneficial pursuit and protect you from wasted effort.",
-
     "🤲 May Allah bless your path with knowledge, patience, sincerity, and beautiful results.",
-
     "🤲 May Allah make you better with every day and closer to Him with every step.",
-
     "🤲 May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
-
     "🤲 May Allah give you the strength to keep learning even when progress seems slow.",
-
     "🤲 May Allah reward your patience and make the fruits of your efforts greater than you expect.",
-
     "🤲 May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
-
     "🤲 May Allah put barakah in everything beneficial that you learn and teach.",
-
     "🤲 May Allah make your words beneficial, your actions sincere, and your intentions pure.",
-
     "🤲 May Allah protect you from harmful knowledge and guide you toward knowledge that brings benefit.",
-
     "🤲 May Allah grant you success with humility and knowledge with wisdom.",
-
     "🤲 May Allah make your journey of learning a journey of growth, goodness, and closeness to Him.",
-
     "🤲 May Allah bless you with a peaceful heart and a mind eager to learn what is beneficial.",
-
     "🤲 May Allah grant you opportunities to use your knowledge in ways that benefit others.",
-
     "🤲 May Allah make your efforts a source of goodness for you in this life and the next.",
-
     "🤲 May Allah grant you patience during hardship and gratitude during ease.",
-
     "🤲 May Allah guide you to the best path and grant you the strength to remain upon it.",
-
     "🤲 May Allah bless you with knowledge that changes your life for the better.",
-
     "🤲 May Allah make your future filled with goodness, growth, peace, and success.",
-
     "🤲 May Allah increase you in every kind of goodness and protect you from every kind of harm.",
-
     "🤲 May Allah bless your heart with faith, your mind with understanding, and your life with barakah.",
-
     "🤲 May Allah grant you success in your studies, your work, your relationships, and your worship.",
-
     "🤲 May Allah make you a person whose knowledge benefits others long after you learn it.",
-
     "🤲 May Allah accept your sincere efforts and multiply the goodness that comes from them.",
-
     "🤲 May Allah grant you a clear mind, a strong heart, and the patience to keep moving forward.",
-
     "🤲 May Allah make every beneficial thing you learn a lasting part of your character.",
-
     "🤲 May Allah guide you toward what is best and keep you away from what would harm you.",
-
     "🤲 May Allah grant you wisdom in speech, kindness in action, and sincerity in your heart.",
-
     "🤲 May Allah make your pursuit of knowledge a source of light, benefit, and reward.",
-
     "🤲 May Allah bless your efforts today and allow their goodness to continue into tomorrow.",
-
     "🤲 May Allah grant you success without arrogance, knowledge without pride, and goodness without showing off.",
-
     "🤲 May Allah make your heart strong, your intentions sincere, and your journey blessed.",
-
     "🤲 May Allah grant you the patience to learn, the wisdom to understand, and the courage to apply what you learn.",
-
     "🤲 May Allah fill your life with moments that increase you in faith, knowledge, gratitude, and peace.",
-
     "🤲 May Allah grant you beneficial knowledge and make you a means through which others benefit.",
-
     "🤲 May Allah bless your future with opportunities that bring you closer to goodness.",
-
     "🤲 May Allah make every sincere step you take toward knowledge a step toward greater goodness.",
-
     "🤲 May Allah grant you a heart that loves goodness and a mind that seeks beneficial knowledge.",
-
     "🤲 May Allah protect you wherever you go and guide you wherever you turn.",
-
     "🤲 May Allah grant you ease after hardship, hope after difficulty, and success after sincere effort.",
-
     "🤲 May Allah bless your life with people who encourage you toward goodness and knowledge.",
-
     "🤲 May Allah make you grateful for what you have, patient with what you lack, and hopeful for what is to come.",
-
     "🤲 May Allah grant you strength, wisdom, and sincerity in every beneficial thing you pursue.",
-
     "🤲 May Allah make your learning a source of confidence, humility, and positive change.",
-
     "🤲 May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
-
     "🤲 May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
-
     "🤲 May Allah make your efforts meaningful, your progress steady, and your future blessed.",
-
     "🤲 May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
-
     "🤲 May Allah bless every good intention in your heart and every sincere effort you make.",
-
-    "🤲 May Allah make your knowledge a source of guidance, your character a source of goodness, and your life a source of benefit.",
-
+    "🤲 May Allah make your knowledge a source of guidance, your character a source of goodness, and your life a source of benefit."
 ]
 
 
 # =========================================================
 # NAME DETECTION
 # =========================================================
+
 NAME_PATTERNS = [
     r"عبد\s*الكريم",
     r"عبد\s+الكريم\s+حمدوش",
@@ -1125,13 +909,19 @@ NAME_PATTERNS = [
     r"abd\s+el\s+krim\s+hamdouche",
     r"abdou",
     r"\bkarim\b",
+    r"كريــم",
+    r"عبدو",
 ]
+
 
 def name_is_mentioned(text):
     if not text:
         return False
 
-    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+    normalized = text.lower()
+    normalized = re.sub(r"[إأآا]", "ا", normalized)
+    normalized = re.sub(r"ى", "ي", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
 
     for pattern in NAME_PATTERNS:
         if re.search(pattern, normalized, re.IGNORECASE):
@@ -1139,14 +929,13 @@ def name_is_mentioned(text):
 
     return False
 
-async def name_reaction(update, context):
 
+async def name_reaction(update, context):
     message = update.effective_message
 
     if not message or not message.text:
         return
 
-    # Anyone who mentions the owner's name gets a reaction + dua
     if not name_is_mentioned(message.text):
         return
 
@@ -1158,13 +947,13 @@ async def name_reaction(update, context):
                 ReactionTypeEmoji("❤️")
             ],
         )
-
     except Exception as e:
         print("Reaction error:", repr(e), flush=True)
 
     await message.reply_text(
         random.choice(DUAS)
     )
+
 
 # =========================================================
 # HELP
@@ -1190,6 +979,7 @@ HELP_TEXT = """
 مرادف word
 
 🔻 <b>Antonyms</b>
+/ant word
 ضد word
 
 🧩 <b>Word Usage</b>
@@ -1211,6 +1001,12 @@ HELP_TEXT = """
 🤖 <b>AI</b>
 /ai your request
 
+💬 <b>Talk Mode</b>
+/talk أو تكلم — التحدث مع البوت كصديق
+
+📚 <b>Vocabulary</b>
+/vocab — عرض الكلمات المحفوظة
+
 💬 <b>Reply mode</b>
 
 Reply to a message and send:
@@ -1219,14 +1015,13 @@ Reply to a message and send:
 /cor
 /ex
 /syn
+/ant
 /use
 /us
 /uk
 /pr
 
 The command will be applied to the message you replied to.
-
-🔇 Normal messages are ignored.
 """
 
 
@@ -1235,14 +1030,12 @@ The command will be applied to the message you replied to.
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
 
     if not user:
         return
 
     if not is_approved(user.id):
-
         add_pending(user.id)
 
         await update.effective_message.reply_text(
@@ -1252,11 +1045,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await notify_owner(update, user)
-
         return
 
     await update.effective_message.reply_text(
-        "👋 Welcome to <b>FixMyEnglish</b>!\n\n"
+        "👋 Welcome to <b>FixMyEnglish Pro</b>!\n\n"
         "🌍 Translation\n"
         "✍️ English correction\n"
         "📖 Word explanations\n"
@@ -1265,14 +1057,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🇺🇸 American pronunciation\n"
         "🇬🇧 British pronunciation\n"
         "🔊 Pronunciation audio\n"
-        "🤖 AI assistant\n\n"
+        "🤖 AI assistant\n"
+        "💬 Talk mode (/talk)\n\n"
         "📚 Send /help to see all commands.",
         parse_mode="HTML",
     )
 
 
 async def help_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
@@ -1280,6 +1072,37 @@ async def help_command(update, context):
         HELP_TEXT,
         parse_mode="HTML",
     )
+
+
+async def talk_command(update, context):
+    user = update.effective_user
+    if not is_approved(user.id):
+        return
+
+    if user.id in talk_mode_users:
+        talk_mode_users.remove(user.id)
+        await update.effective_message.reply_text("💤 Talk mode disabled.")
+    else:
+        talk_mode_users.add(user.id)
+        greetings = [
+            f"Hey {user.first_name}! What's on your mind today, my friend?",
+            f"Yo! Ready to chat or practice some English, {user.first_name}?",
+            f"Hello there! Let's talk about whatever you want, bro.",
+        ]
+        await update.effective_message.reply_text(random.choice(greetings))
+
+
+async def vocab_command(update, context):
+    user = update.effective_user
+    if not is_approved(user.id):
+        return
+    uid_str = str(user.id)
+    words = vocab_bank.get(uid_str, [])
+    if not words:
+        await update.effective_message.reply_text("📭 Your vocabulary bank is empty.")
+        return
+    text = "📚 <b>Your Saved Words:</b>\n\n" + "\n".join(f"• {w}" for w in words)
+    await update.effective_message.reply_text(text, parse_mode="HTML")
 
 
 # =========================================================
@@ -1292,7 +1115,6 @@ async def notify_owner(update, user):
         return
 
     try:
-
         name = user.full_name or "Unknown"
         username = (
             f"@{user.username}"
@@ -1331,7 +1153,6 @@ async def notify_owner(update, user):
 
 
 async def context_bot_send(update, text, keyboard):
-
     await update.get_bot().send_message(
         chat_id=OWNER_ID,
         text=text,
@@ -1341,7 +1162,6 @@ async def context_bot_send(update, text, keyboard):
 
 
 async def access_callback(update, context):
-
     query = update.callback_query
 
     if not query:
@@ -1369,7 +1189,6 @@ async def access_callback(update, context):
         return
 
     if action == "approve":
-
         add_approved(user_id)
         remove_pending(user_id)
 
@@ -1387,7 +1206,6 @@ async def access_callback(update, context):
             print("Approval message error:", repr(e))
 
     elif action == "reject":
-
         remove_pending(user_id)
 
         await query.edit_message_text(
@@ -1409,7 +1227,6 @@ async def access_callback(update, context):
 # =========================================================
 
 def extract_user_id(message):
-
     target = get_target_text(message)
 
     if not target:
@@ -1427,20 +1244,17 @@ def extract_user_id(message):
 
 
 async def add_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
     user_id = extract_user_id(update.effective_message)
 
     if user_id is None:
-
         await update.effective_message.reply_text(
             "Usage:\n"
             "/add USER_ID\n\n"
             "Or reply to the user's message with /add"
         )
-
         return
 
     add_approved(user_id)
@@ -1452,19 +1266,16 @@ async def add_command(update, context):
 
 
 async def del_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
     user_id = extract_user_id(update.effective_message)
 
     if user_id is None:
-
         await update.effective_message.reply_text(
             "Usage:\n"
             "/del USER_ID"
         )
-
         return
 
     remove_approved(user_id)
@@ -1475,7 +1286,6 @@ async def del_command(update, context):
 
 
 async def list_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
@@ -1506,18 +1316,15 @@ async def list_command(update, context):
 
 
 async def approve_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
     user_id = extract_user_id(update.effective_message)
 
     if user_id is None:
-
         await update.effective_message.reply_text(
             "Usage: /approve USER_ID"
         )
-
         return
 
     add_approved(user_id)
@@ -1537,18 +1344,15 @@ async def approve_command(update, context):
 
 
 async def reject_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
     user_id = extract_user_id(update.effective_message)
 
     if user_id is None:
-
         await update.effective_message.reply_text(
             "Usage: /reject USER_ID"
         )
-
         return
 
     remove_pending(user_id)
@@ -1559,7 +1363,6 @@ async def reject_command(update, context):
 
 
 async def stats_command(update, context):
-
     if not is_owner(update.effective_user.id):
         return
 
@@ -1576,134 +1379,134 @@ async def stats_command(update, context):
 # =========================================================
 
 async def tr_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage: /tr text\n\n"
             "Or reply to a message with /tr"
         )
-
         return
 
     await send_long_reply(
         update,
-        translate_text(text),
+        await translate_text(text),
     )
 
 
 async def cor_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage: /cor text"
         )
-
         return
 
     await send_long_reply(
         update,
-        correct_text(text),
+        await correct_text(text),
     )
 
 
 async def ex_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage: /ex word"
         )
-
         return
 
+    save_vocab(update.effective_user.id, text)
     await send_long_reply(
         update,
-        explain_text(text),
+        await explain_text(text),
     )
 
 
 async def syn_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage: /syn word"
         )
-
         return
 
     await send_long_reply(
         update,
-        synonyms_text(text),
+        await synonyms_text(text),
+    )
+
+
+async def ant_command(update, context):
+    if not is_approved(update.effective_user.id):
+        return
+
+    text = get_target_text(update.effective_message)
+
+    if not text:
+        await update.effective_message.reply_text(
+            "Usage: /ant word"
+        )
+        return
+
+    await send_long_reply(
+        update,
+        await antonyms_text(text),
     )
 
 
 async def use_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage: /use word"
         )
-
         return
 
     await send_long_reply(
         update,
-        use_word(text),
+        await use_word(text),
     )
 
 
 async def ai_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
     text = get_target_text(update.effective_message)
 
     if not text:
-
         await update.effective_message.reply_text(
             "Usage:\n/ai your request"
         )
-
         return
 
     await send_long_reply(
         update,
-        free_ai(text),
+        await free_ai(text),
     )
 
 
 async def us_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
@@ -1723,7 +1526,6 @@ async def us_command(update, context):
 
 
 async def uk_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
@@ -1743,7 +1545,6 @@ async def uk_command(update, context):
 
 
 async def pr_command(update, context):
-
     if not is_approved(update.effective_user.id):
         return
 
@@ -1776,11 +1577,11 @@ ARABIC_COMMANDS = {
     "امريكي": "us",
     "بريطاني": "uk",
     "انطق": "pr",
+    "تكلم": "talk",
 }
 
 
 async def arabic_command_handler(update, context):
-
     message = update.effective_message
 
     if not message or not message.text:
@@ -1790,24 +1591,23 @@ async def arabic_command_handler(update, context):
         return
 
     text = message.text.strip()
-
     parts = text.split(maxsplit=1)
-
     command = parts[0].lower()
 
     if command not in ARABIC_COMMANDS:
         return
 
     action = ARABIC_COMMANDS[command]
-
     argument = (
         parts[1].strip()
         if len(parts) == 2
         else ""
     )
 
-    # A bare command does nothing,
-    # unless it is a reply.
+    if action == "talk":
+        await talk_command(update, context)
+        return
+
     if not argument:
         argument = get_reply_text(message)
 
@@ -1815,70 +1615,24 @@ async def arabic_command_handler(update, context):
         return
 
     if action == "tr":
-
-        await send_long_reply(
-            update,
-            translate_text(argument),
-        )
-
+        await send_long_reply(update, await translate_text(argument))
     elif action == "cor":
-
-        await send_long_reply(
-            update,
-            correct_text(argument),
-        )
-
+        await send_long_reply(update, await correct_text(argument))
     elif action == "ex":
-
-        await send_long_reply(
-            update,
-            explain_text(argument),
-        )
-
+        save_vocab(update.effective_user.id, argument)
+        await send_long_reply(update, await explain_text(argument))
     elif action == "syn":
-
-        await send_long_reply(
-            update,
-            synonyms_text(argument),
-        )
-
+        await send_long_reply(update, await synonyms_text(argument))
     elif action == "ant":
-
-        await send_long_reply(
-            update,
-            antonyms_text(argument),
-        )
-
+        await send_long_reply(update, await antonyms_text(argument))
     elif action == "use":
-
-        await send_long_reply(
-            update,
-            use_word(argument),
-        )
-
+        await send_long_reply(update, await use_word(argument))
     elif action == "us":
-
-        await send_pronunciation(
-            update,
-            argument,
-            "US",
-        )
-
+        await send_pronunciation(update, argument, "US")
     elif action == "uk":
-
-        await send_pronunciation(
-            update,
-            argument,
-            "UK",
-        )
-
+        await send_pronunciation(update, argument, "UK")
     elif action == "pr":
-
-        await send_pronunciation(
-            update,
-            argument,
-            "BOTH",
-        )
+        await send_pronunciation(update, argument, "BOTH")
 
 
 # =========================================================
@@ -1886,31 +1640,48 @@ async def arabic_command_handler(update, context):
 # =========================================================
 
 async def normal_message_handler(update, context):
-
     message = update.effective_message
 
     if not message or not message.text:
         return
 
-    text = message.text.strip()
+    user = update.effective_user
+    if not is_approved(user.id):
+        return
 
+    # 1. التفاعل بالقلب والدعاء عند ذكر الاسم
+    await name_reaction(update, context)
+
+    text = message.text.strip()
     first_word = text.split(maxsplit=1)[0].lower()
 
     if first_word in ARABIC_COMMANDS:
-
-        await arabic_command_handler(
-            update,
-            context,
-        )
-
+        await arabic_command_handler(update, context)
         return
 
-    # Normal messages:
-    # only check for the special name feature.
-    await name_reaction(
-        update,
-        context,
+    is_group = message.chat.type in ["group", "supergroup"]
+    
+    is_reply_to_bot = (
+        message.reply_to_message and 
+        message.reply_to_message.from_user and 
+        message.reply_to_message.from_user.id == context.bot.id
     )
+
+    if user.id in talk_mode_users:
+        if is_group and not is_reply_to_bot:
+            return
+        reply = await talk_with_ai(text, user.first_name)
+        await message.reply_text(reply)
+        return
+
+    # التصحيح التلقائي في المجموعات: بين كلمة و 20 كلمة بالإنجليزية فقط
+    if is_group:
+        words = text.split()
+        is_english = bool(re.search(r'[A-Za-z]', text)) and not re.search(r'[\u0600-\u06FF]', text)
+        if is_english and 1 <= len(words) <= 20:
+            correction = await auto_correct_chat(text)
+            if correction and correction.strip().lower() not in {"ok", "ok."}:
+                await message.reply_text(f"💡 Correction hint:\n{correction}")
 
 
 # =========================================================
@@ -1918,11 +1689,7 @@ async def normal_message_handler(update, context):
 # =========================================================
 
 async def error_handler(update, context):
-
-    print(
-        "Telegram error:",
-        repr(context.error),
-    )
+    print("Telegram error:", repr(context.error))
 
 
 # =========================================================
@@ -1931,21 +1698,18 @@ async def error_handler(update, context):
 
 @app.route("/")
 def home():
-
-    return "FixMyEnglish is alive!"
+    return "FixMyEnglish Pro is alive!"
 
 
 @app.route("/health")
 def health():
-
     return {
         "status": "ok",
-        "bot": "FixMyEnglish",
+        "bot": "FixMyEnglish Pro",
     }
 
 
 def run_flask():
-
     port = int(
         os.getenv(
             "PORT",
@@ -1966,17 +1730,18 @@ def run_flask():
 # =========================================================
 
 async def post_init(application):
-
     try:
-
         await application.bot.set_my_commands(
             [
                 ("start", "Start FixMyEnglish"),
                 ("help", "Show commands"),
+                ("talk", "Talk mode"),
+                ("vocab", "Saved words"),
                 ("tr", "Translate"),
                 ("cor", "Correct English"),
                 ("ex", "Explain"),
                 ("syn", "Synonyms"),
+                ("ant", "Antonyms"),
                 ("use", "Use a word"),
                 ("us", "American pronunciation"),
                 ("uk", "British pronunciation"),
@@ -1984,13 +1749,8 @@ async def post_init(application):
                 ("ai", "Ask AI"),
             ]
         )
-
     except Exception as e:
-
-        print(
-            "Command menu error:",
-            repr(e),
-        )
+        print("Command menu error:", repr(e))
 
 
 # =========================================================
@@ -1998,7 +1758,6 @@ async def post_init(application):
 # =========================================================
 
 def build_application():
-
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -2006,137 +1765,32 @@ def build_application():
         .build()
     )
 
-    # General
-    application.add_handler(
-        CommandHandler(
-            "start",
-            start,
-        )
-    )
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("talk", talk_command))
+    application.add_handler(CommandHandler("vocab", vocab_command))
 
-    application.add_handler(
-        CommandHandler(
-            "help",
-            help_command,
-        )
-    )
+    application.add_handler(CommandHandler("tr", tr_command))
+    application.add_handler(CommandHandler("cor", cor_command))
+    application.add_handler(CommandHandler("ex", ex_command))
+    application.add_handler(CommandHandler("syn", syn_command))
+    application.add_handler(CommandHandler("ant", ant_command))
+    application.add_handler(CommandHandler("use", use_command))
+    application.add_handler(CommandHandler("ai", ai_command))
 
-    # Language
-    application.add_handler(
-        CommandHandler(
-            "tr",
-            tr_command,
-        )
-    )
+    application.add_handler(CommandHandler("us", us_command))
+    application.add_handler(CommandHandler("uk", uk_command))
+    application.add_handler(CommandHandler("pr", pr_command))
 
-    application.add_handler(
-        CommandHandler(
-            "cor",
-            cor_command,
-        )
-    )
+    application.add_handler(CommandHandler("add", add_command))
+    application.add_handler(CommandHandler("del", del_command))
+    application.add_handler(CommandHandler("list", list_command))
+    application.add_handler(CommandHandler("approve", approve_command))
+    application.add_handler(CommandHandler("reject", reject_command))
+    application.add_handler(CommandHandler("stats", stats_command))
 
-    application.add_handler(
-        CommandHandler(
-            "ex",
-            ex_command,
-        )
-    )
+    application.add_handler(CallbackQueryHandler(access_callback))
 
-    application.add_handler(
-        CommandHandler(
-            "syn",
-            syn_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "use",
-            use_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "ai",
-            ai_command,
-        )
-    )
-
-    # Pronunciation
-    application.add_handler(
-        CommandHandler(
-            "us",
-            us_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "uk",
-            uk_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "pr",
-            pr_command,
-        )
-    )
-
-    # Owner
-    application.add_handler(
-        CommandHandler(
-            "add",
-            add_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "del",
-            del_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "list",
-            list_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "approve",
-            approve_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "reject",
-            reject_command,
-        )
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "stats",
-            stats_command,
-        )
-    )
-
-    # Approval buttons
-    application.add_handler(
-        CallbackQueryHandler(
-            access_callback,
-        )
-    )
-
-    # Normal text
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -2144,9 +1798,7 @@ def build_application():
         )
     )
 
-    application.add_error_handler(
-        error_handler
-    )
+    application.add_error_handler(error_handler)
 
     return application
 
@@ -2156,7 +1808,7 @@ def build_application():
 # =========================================================
 
 def main():
-    print("=== FixMyEnglish START ===", flush=True)
+    print("=== FixMyEnglish Pro START ===", flush=True)
 
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing.")
@@ -2199,5 +1851,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
