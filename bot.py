@@ -57,6 +57,9 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 json_lock = threading.Lock()
 talk_mode_users = set()
 
+# نحفظ username المالك إذا ظهر لنا في رسالة
+OWNER_USERNAME = None
+
 
 # =========================================================
 # JSON STORAGE
@@ -74,7 +77,7 @@ def load_json(path, default):
             return data
 
         except Exception as e:
-            print("Load JSON error:", repr(e))
+            print("Load JSON error:", repr(e), flush=True)
             return default
 
 
@@ -85,7 +88,7 @@ def save_json(path, data):
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            print("Save JSON error:", repr(e))
+            print("Save JSON error:", repr(e), flush=True)
 
 
 approved_users = load_json(USERS_FILE, [])
@@ -93,12 +96,14 @@ pending_users = load_json(PENDING_FILE, [])
 vocab_bank = load_json(VOCAB_FILE, {})
 
 approved_users = [
-    int(x) for x in approved_users
+    int(x)
+    for x in approved_users
     if str(x).lstrip("-").isdigit()
 ]
 
 pending_users = [
-    int(x) for x in pending_users
+    int(x)
+    for x in pending_users
     if str(x).lstrip("-").isdigit()
 ]
 
@@ -273,7 +278,7 @@ def _ask_groq_sync(prompt, max_tokens=1200, system_prompt=None):
         return result.strip()
 
     except Exception as e:
-        print("Groq error:", repr(e))
+        print("Groq error:", repr(e), flush=True)
         return "❌ AI request failed. Please try again."
 
 
@@ -765,16 +770,19 @@ async def send_pronunciation(update, word, dialect):
         voice = US_VOICE
 
     if word_count <= 4:
+
         if dialect == "US":
             info = await pronunciation_info(
                 word,
                 "US",
             )
+
         elif dialect == "UK":
             info = await pronunciation_info(
                 word,
                 "UK",
             )
+
         else:
             info = await both_pronunciation(word)
 
@@ -823,126 +831,126 @@ async def send_pronunciation(update, word, dialect):
 
 
 # =========================================================
-# DUAS (ALL 100+ DUAS)
+# DUAS
 # =========================================================
 
 DUAS = [
-    "🤲 May Allah bless you with beneficial knowledge, wisdom, and success.",
-    "🤲 May Allah increase you in knowledge, understanding, and goodness.",
-    "🤲 May Allah open the doors of beneficial knowledge for you.",
-    "🤲 May Allah bless your time, your efforts, and everything you learn.",
-    "🤲 May Allah guide you to what is good and make your path easy.",
-    "🤲 May Allah grant you knowledge that benefits you and benefits others.",
-    "🤲 May Allah increase you in faith, knowledge, wisdom, and good character.",
-    "🤲 May Allah make your journey toward knowledge full of blessings and success.",
-    "🤲 May Allah make every difficulty easy for you and every good effort fruitful.",
-    "🤲 May Allah bless your mind with understanding and your heart with peace.",
-    "🤲 May Allah grant you clarity, patience, and success in all that is good.",
-    "🤲 May Allah make your knowledge a source of benefit in this life and the Hereafter.",
-    "🤲 May Allah bless you with sincere intentions and beneficial actions.",
-    "🤲 May Allah increase you in wisdom and guide you to the best choices.",
-    "🤲 May Allah make learning easy for you and put barakah in your efforts.",
-    "🤲 May Allah grant you success beyond what you expect and goodness beyond what you imagine.",
-    "🤲 May Allah protect you, guide you, and surround you with His mercy.",
-    "🤲 May Allah grant you a heart full of gratitude, patience, and peace.",
-    "🤲 May Allah bless every step you take toward knowledge and righteousness.",
-    "🤲 May Allah make your efforts sincere, your knowledge beneficial, and your path blessed.",
-    "🤲 May Allah open for you doors of understanding that you never expected.",
-    "🤲 May Allah grant you strength when learning is difficult and patience when progress is slow.",
-    "🤲 May Allah put light in your heart, clarity in your mind, and barakah in your time.",
-    "🤲 May Allah make you a source of benefit and goodness wherever you go.",
-    "🤲 May Allah grant you success in your studies and bless you with lasting knowledge.",
-    "🤲 May Allah make your pursuit of knowledge a means of drawing closer to Him.",
-    "🤲 May Allah reward your efforts, forgive your shortcomings, and increase you in goodness.",
-    "🤲 May Allah grant you beneficial knowledge, lawful provision, good health, and a peaceful heart.",
-    "🤲 May Allah guide you whenever you are uncertain and strengthen you whenever you struggle.",
-    "🤲 May Allah bless your future and make it better than you hope.",
-    "🤲 May Allah grant you excellence in what you learn and wisdom in how you use it.",
-    "🤲 May Allah make every page you read and every word you learn a source of benefit.",
-    "🤲 May Allah bless your memory, strengthen your understanding, and make learning easy for you.",
-    "🤲 May Allah grant you patience with yourself and consistency in seeking knowledge.",
-    "🤲 May Allah give you the ability to understand, remember, and apply beneficial knowledge.",
-    "🤲 May Allah make your knowledge a light for you and a benefit to those around you.",
-    "🤲 May Allah bless your dreams, guide your steps, and grant you what is best for you.",
-    "🤲 May Allah replace every difficulty with ease and every worry with peace.",
-    "🤲 May Allah grant you sincerity in your intentions and excellence in your actions.",
-    "🤲 May Allah keep you steadfast upon goodness and guide you to what pleases Him.",
-    "🤲 May Allah bless your journey, protect you from harm, and grant you a beautiful future.",
-    "🤲 May Allah grant you courage to continue, patience to persevere, and wisdom to learn.",
-    "🤲 May Allah make your efforts today a reason for greater blessings tomorrow.",
-    "🤲 May Allah grant you success in this world and lasting success in the Hereafter.",
-    "🤲 May Allah fill your life with beneficial knowledge, righteous deeds, and peaceful moments.",
-    "🤲 May Allah guide your heart, enlighten your mind, and bless your endeavors.",
-    "🤲 May Allah grant you the best of what you seek and protect you from what harms you.",
-    "🤲 May Allah make you among those who learn, understand, practice, and teach what is good.",
-    "🤲 May Allah bless you with good companions, beneficial knowledge, and a righteous path.",
-    "🤲 May Allah make your future bright with faith, knowledge, goodness, and success.",
-    "🤲 May Allah give you strength to overcome every obstacle and wisdom to learn from every experience.",
-    "🤲 May Allah grant you peace in your heart, clarity in your thoughts, and blessings in your life.",
-    "🤲 May Allah make every sincere effort you make a reason for reward and goodness.",
-    "🤲 May Allah grant you a beautiful character, beneficial knowledge, and a heart attached to goodness.",
-    "🤲 May Allah protect your heart from despair and fill it with hope, patience, and trust in Him.",
-    "🤲 May Allah bless you with opportunities that bring you closer to what is good.",
-    "🤲 May Allah make your learning journey enjoyable, beneficial, and full of barakah.",
-    "🤲 May Allah grant you understanding deeper than memorization and wisdom greater than information.",
-    "🤲 May Allah bless what you know, teach you what you do not know, and benefit you through both.",
-    "🤲 May Allah make your knowledge a means of helping yourself, your family, and your community.",
-    "🤲 May Allah grant you steadfastness when the road is difficult and gratitude when it becomes easy.",
-    "🤲 May Allah open your heart to knowledge and make you among those who act upon what they learn.",
-    "🤲 May Allah bless your days with purpose, your nights with peace, and your efforts with success.",
-    "🤲 May Allah grant you what is good for you, even when you do not know what is best for yourself.",
-    "🤲 May Allah guide you toward people and opportunities that bring goodness into your life.",
-    "🤲 May Allah make your knowledge increase your humility, your wisdom, and your kindness.",
-    "🤲 May Allah grant you success in every beneficial pursuit and protect you from wasted effort.",
-    "🤲 May Allah bless your path with knowledge, patience, sincerity, and beautiful results.",
-    "🤲 May Allah make you better with every day and closer to Him with every step.",
-    "🤲 May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
-    "🤲 May Allah give you the strength to keep learning even when progress seems slow.",
-    "🤲 May Allah reward your patience and make the fruits of your efforts greater than you expect.",
-    "🤲 May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
-    "🤲 May Allah put barakah in everything beneficial that you learn and teach.",
-    "🤲 May Allah make your words beneficial, your actions sincere, and your intentions pure.",
-    "🤲 May Allah protect you from harmful knowledge and guide you toward knowledge that brings benefit.",
-    "🤲 May Allah grant you success with humility and knowledge with wisdom.",
-    "🤲 May Allah make your journey of learning a journey of growth, goodness, and closeness to Him.",
-    "🤲 May Allah bless you with a peaceful heart and a mind eager to learn what is beneficial.",
-    "🤲 May Allah grant you opportunities to use your knowledge in ways that benefit others.",
-    "🤲 May Allah make your efforts a source of goodness for you in this life and the next.",
-    "🤲 May Allah grant you patience during hardship and gratitude during ease.",
-    "🤲 May Allah guide you to the best path and grant you the strength to remain upon it.",
-    "🤲 May Allah bless you with knowledge that changes your life for the better.",
-    "🤲 May Allah make your future filled with goodness, growth, peace, and success.",
-    "🤲 May Allah increase you in every kind of goodness and protect you from every kind of harm.",
-    "🤲 May Allah bless your heart with faith, your mind with understanding, and your life with barakah.",
-    "🤲 May Allah grant you success in your studies, your work, your relationships, and your worship.",
-    "🤲 May Allah make you a person whose knowledge benefits others long after you learn it.",
-    "🤲 May Allah accept your sincere efforts and multiply the goodness that comes from them.",
-    "🤲 May Allah grant you a clear mind, a strong heart, and the patience to keep moving forward.",
-    "🤲 May Allah make every beneficial thing you learn a lasting part of your character.",
-    "🤲 May Allah guide you toward what is best and keep you away from what would harm you.",
-    "🤲 May Allah grant you wisdom in speech, kindness in action, and sincerity in your heart.",
-    "🤲 May Allah make your pursuit of knowledge a source of light, benefit, and reward.",
-    "🤲 May Allah bless your efforts today and allow their goodness to continue into tomorrow.",
-    "🤲 May Allah grant you success without arrogance, knowledge without pride, and goodness without showing off.",
-    "🤲 May Allah make your heart strong, your intentions sincere, and your journey blessed.",
-    "🤲 May Allah grant you the patience to learn, the wisdom to understand, and the courage to apply what you learn.",
-    "🤲 May Allah fill your life with moments that increase you in faith, knowledge, gratitude, and peace.",
-    "🤲 May Allah grant you beneficial knowledge and make you a means through which others benefit.",
-    "🤲 May Allah bless your future with opportunities that bring you closer to goodness.",
-    "🤲 May Allah make every sincere step you take toward knowledge a step toward greater goodness.",
-    "🤲 May Allah grant you a heart that loves goodness and a mind that seeks beneficial knowledge.",
-    "🤲 May Allah protect you wherever you go and guide you wherever you turn.",
-    "🤲 May Allah grant you ease after hardship, hope after difficulty, and success after sincere effort.",
-    "🤲 May Allah bless your life with people who encourage you toward goodness and knowledge.",
-    "🤲 May Allah make you grateful for what you have, patient with what you lack, and hopeful for what is to come.",
-    "🤲 May Allah grant you strength, wisdom, and sincerity in every beneficial thing you pursue.",
-    "🤲 May Allah make your learning a source of confidence, humility, and positive change.",
-    "🤲 May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
-    "🤲 May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
-    "🤲 May Allah make your efforts meaningful, your progress steady, and your future blessed.",
-    "🤲 May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
-    "🤲 May Allah bless every good intention in your heart and every sincere effort you make.",
-    "🤲 May Allah make your knowledge a source of guidance, your character a source of goodness, and your life a source of benefit."
+    "May Allah bless you with beneficial knowledge, wisdom, and success.",
+    "May Allah increase you in knowledge, understanding, and goodness.",
+    "May Allah open the doors of beneficial knowledge for you.",
+    "May Allah bless your time, your efforts, and everything you learn.",
+    "May Allah guide you to what is good and make your path easy.",
+    "May Allah grant you knowledge that benefits you and benefits others.",
+    "May Allah increase you in faith, knowledge, wisdom, and good character.",
+    "May Allah make your journey toward knowledge full of blessings and success.",
+    "May Allah make every difficulty easy for you and every good effort fruitful.",
+    "May Allah bless your mind with understanding and your heart with peace.",
+    "May Allah grant you clarity, patience, and success in all that is good.",
+    "May Allah make your knowledge a source of benefit in this life and the Hereafter.",
+    "May Allah bless you with sincere intentions and beneficial actions.",
+    "May Allah increase you in wisdom and guide you to the best choices.",
+    "May Allah make learning easy for you and put barakah in your efforts.",
+    "May Allah grant you success beyond what you expect and goodness beyond what you imagine.",
+    "May Allah protect you, guide you, and surround you with His mercy.",
+    "May Allah grant you a heart full of gratitude, patience, and peace.",
+    "May Allah bless every step you take toward knowledge and righteousness.",
+    "May Allah make your efforts sincere, your knowledge beneficial, and your path blessed.",
+    "May Allah open for you doors of understanding that you never expected.",
+    "May Allah grant you strength when learning is difficult and patience when progress is slow.",
+    "May Allah put light in your heart, clarity in your mind, and barakah in your time.",
+    "May Allah make you a source of benefit and goodness wherever you go.",
+    "May Allah grant you success in your studies and bless you with lasting knowledge.",
+    "May Allah make your pursuit of knowledge a means of drawing closer to Him.",
+    "May Allah reward your efforts, forgive your shortcomings, and increase you in goodness.",
+    "May Allah grant you beneficial knowledge, lawful provision, good health, and a peaceful heart.",
+    "May Allah guide you whenever you are uncertain and strengthen you whenever you struggle.",
+    "May Allah bless your future and make it better than you hope.",
+    "May Allah grant you excellence in what you learn and wisdom in how you use it.",
+    "May Allah make every page you read and every word you learn a source of benefit.",
+    "May Allah bless your memory, strengthen your understanding, and make learning easy for you.",
+    "May Allah grant you patience with yourself and consistency in seeking knowledge.",
+    "May Allah give you the ability to understand, remember, and apply beneficial knowledge.",
+    "May Allah make your knowledge a light for you and a benefit to those around you.",
+    "May Allah bless your dreams, guide your steps, and grant you what is best for you.",
+    "May Allah replace every difficulty with ease and every worry with peace.",
+    "May Allah grant you sincerity in your intentions and excellence in your actions.",
+    "May Allah keep you steadfast upon goodness and guide you to what pleases Him.",
+    "May Allah bless your journey, protect you from harm, and grant you a beautiful future.",
+    "May Allah grant you courage to continue, patience to persevere, and wisdom to learn.",
+    "May Allah make your efforts today a reason for greater blessings tomorrow.",
+    "May Allah grant you success in this world and lasting success in the Hereafter.",
+    "May Allah fill your life with beneficial knowledge, righteous deeds, and peaceful moments.",
+    "May Allah guide your heart, enlighten your mind, and bless your endeavors.",
+    "May Allah grant you the best of what you seek and protect you from what harms you.",
+    "May Allah make you among those who learn, understand, practice, and teach what is good.",
+    "May Allah bless you with good companions, beneficial knowledge, and a righteous path.",
+    "May Allah make your future bright with faith, knowledge, goodness, and success.",
+    "May Allah give you strength to overcome every obstacle and wisdom to learn from every experience.",
+    "May Allah grant you peace in your heart, clarity in your thoughts, and blessings in your life.",
+    "May Allah make every sincere effort you make a reason for reward and goodness.",
+    "May Allah grant you a beautiful character, beneficial knowledge, and a heart attached to goodness.",
+    "May Allah protect your heart from despair and fill it with hope, patience, and trust in Him.",
+    "May Allah bless you with opportunities that bring you closer to what is good.",
+    "May Allah make your learning journey enjoyable, beneficial, and full of barakah.",
+    "May Allah grant you understanding deeper than memorization and wisdom greater than information.",
+    "May Allah bless what you know, teach you what you do not know, and benefit you through both.",
+    "May Allah make your knowledge a means of helping yourself, your family, and your community.",
+    "May Allah grant you steadfastness when the road is difficult and gratitude when it becomes easy.",
+    "May Allah open your heart to knowledge and make you among those who act upon what they learn.",
+    "May Allah bless your days with purpose, your nights with peace, and your efforts with success.",
+    "May Allah grant you what is good for you, even when you do not know what is best for yourself.",
+    "May Allah guide you toward people and opportunities that bring goodness into your life.",
+    "May Allah make your knowledge increase your humility, your wisdom, and your kindness.",
+    "May Allah grant you success in every beneficial pursuit and protect you from wasted effort.",
+    "May Allah bless your path with knowledge, patience, sincerity, and beautiful results.",
+    "May Allah make you better with every day and closer to Him with every step.",
+    "May Allah grant you a life filled with beneficial knowledge, righteous deeds, and sincere friendships.",
+    "May Allah give you the strength to keep learning even when progress seems slow.",
+    "May Allah reward your patience and make the fruits of your efforts greater than you expect.",
+    "May Allah grant you wisdom to know what matters, courage to pursue it, and patience to continue.",
+    "May Allah put barakah in everything beneficial that you learn and teach.",
+    "May Allah make your words beneficial, your actions sincere, and your intentions pure.",
+    "May Allah protect you from harmful knowledge and guide you toward knowledge that brings benefit.",
+    "May Allah grant you success with humility and knowledge with wisdom.",
+    "May Allah make your journey of learning a journey of growth, goodness, and closeness to Him.",
+    "May Allah bless you with a peaceful heart and a mind eager to learn what is beneficial.",
+    "May Allah grant you opportunities to use your knowledge in ways that benefit others.",
+    "May Allah make your efforts a source of goodness for you in this life and the next.",
+    "May Allah grant you patience during hardship and gratitude during ease.",
+    "May Allah guide you to the best path and grant you the strength to remain upon it.",
+    "May Allah bless you with knowledge that changes your life for the better.",
+    "May Allah make your future filled with goodness, growth, peace, and success.",
+    "May Allah increase you in every kind of goodness and protect you from every kind of harm.",
+    "May Allah bless your heart with faith, your mind with understanding, and your life with barakah.",
+    "May Allah grant you success in your studies, your work, your relationships, and your worship.",
+    "May Allah make you a person whose knowledge benefits others long after you learn it.",
+    "May Allah accept your sincere efforts and multiply the goodness that comes from them.",
+    "May Allah grant you a clear mind, a strong heart, and the patience to keep moving forward.",
+    "May Allah make every beneficial thing you learn a lasting part of your character.",
+    "May Allah guide you toward what is best and keep you away from what would harm you.",
+    "May Allah grant you wisdom in speech, kindness in action, and sincerity in your heart.",
+    "May Allah make your pursuit of knowledge a source of light, benefit, and reward.",
+    "May Allah bless your efforts today and allow their goodness to continue into tomorrow.",
+    "May Allah grant you success without arrogance, knowledge without pride, and goodness without showing off.",
+    "May Allah make your heart strong, your intentions sincere, and your journey blessed.",
+    "May Allah grant you the patience to learn, the wisdom to understand, and the courage to apply what you learn.",
+    "May Allah fill your life with moments that increase you in faith, knowledge, gratitude, and peace.",
+    "May Allah grant you beneficial knowledge and make you a means through which others benefit.",
+    "May Allah bless your future with opportunities that bring you closer to goodness.",
+    "May Allah make every sincere step you take toward knowledge a step toward greater goodness.",
+    "May Allah grant you a heart that loves goodness and a mind that seeks beneficial knowledge.",
+    "May Allah protect you wherever you go and guide you wherever you turn.",
+    "May Allah grant you ease after hardship, hope after difficulty, and success after sincere effort.",
+    "May Allah bless your life with people who encourage you toward goodness and knowledge.",
+    "May Allah make you grateful for what you have, patient with what you lack, and hopeful for what is to come.",
+    "May Allah grant you strength, wisdom, and sincerity in every beneficial thing you pursue.",
+    "May Allah make your learning a source of confidence, humility, and positive change.",
+    "May Allah bless you with knowledge that benefits your heart, your mind, and your actions.",
+    "May Allah grant you success in ways that bring you closer to Him and benefit those around you.",
+    "May Allah make your efforts meaningful, your progress steady, and your future blessed.",
+    "May Allah grant you a peaceful heart and a purposeful life filled with beneficial deeds.",
+    "May Allah bless every good intention in your heart and every sincere effort you make.",
+    "May Allah make your knowledge a source of guidance, your character a source of goodness, and your life a source of benefit."
 ]
 
 
@@ -952,16 +960,10 @@ DUAS = [
 
 NAME_PATTERNS = [
     r"عبد\s*الكريم",
-    r"عبد\s+الكريم\s+حمدوش",
-    r"abdelkrim",
-    r"abd\s*el\s*krim",
-    r"abd\s*elkrim",
-    r"abdelkrim\s+hamdouche",
-    r"abd\s+el\s+krim\s+hamdouche",
-    r"abdou",
+    r"كريمو",
     r"\bkarim\b",
-    r"كريــم",
-    r"عبدو",
+    r"\babdelkarim\b",
+    r"\babdlkrim\b",
 ]
 
 
@@ -969,26 +971,148 @@ def name_is_mentioned(text):
     if not text:
         return False
 
-    normalized = text.lower()
-    normalized = re.sub(r"[إأآا]", "ا", normalized)
-    normalized = re.sub(r"ى", "ي", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = text.lower().strip()
+
+    normalized = re.sub(
+        r"[إأآا]",
+        "ا",
+        normalized,
+    )
+
+    normalized = re.sub(
+        r"ى",
+        "ي",
+        normalized,
+    )
+
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        normalized,
+    )
 
     for pattern in NAME_PATTERNS:
-        if re.search(pattern, normalized, re.IGNORECASE):
+        if re.search(
+            pattern,
+            normalized,
+            re.IGNORECASE,
+        ):
             return True
 
     return False
 
 
-async def name_reaction(update, context):
+async def name_is_tagged(update, context):
+    global OWNER_USERNAME
+
     message = update.effective_message
 
-    if not message or not message.text:
+    if not message:
+        return False
+
+    # -----------------------------------------------------
+    # إذا كان الشخص يرد على رسالة المالك
+    # -----------------------------------------------------
+
+    if (
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == OWNER_ID
+    ):
+        return True
+
+    # -----------------------------------------------------
+    # إذا كانت هذه الرسالة من المالك، نحفظ username الخاص به
+    # -----------------------------------------------------
+
+    sender = update.effective_user
+
+    if (
+        sender
+        and sender.id == OWNER_ID
+        and sender.username
+    ):
+        OWNER_USERNAME = sender.username.lower()
+
+    # -----------------------------------------------------
+    # Telegram text mention
+    # مثال: الشخص يختار حسابك مباشرة من Telegram
+    # -----------------------------------------------------
+
+    entities = []
+
+    if message.entities:
+        entities.extend(message.entities)
+
+    if message.caption_entities:
+        entities.extend(message.caption_entities)
+
+    text = message.text or message.caption or ""
+
+    for entity in entities:
+
+        if entity.type == "text_mention":
+
+            if (
+                entity.user
+                and entity.user.id == OWNER_ID
+            ):
+                return True
+
+        elif entity.type == "mention":
+
+            if not OWNER_USERNAME:
+                continue
+
+            mentioned_username = text[
+                entity.offset:
+                entity.offset + entity.length
+            ].lower().lstrip("@")
+
+            if mentioned_username == OWNER_USERNAME:
+                return True
+
+    return False
+
+
+async def name_reaction(update, context):
+
+    message = update.effective_message
+
+    if not message:
         return
 
-    if not name_is_mentioned(message.text):
+    text = message.text or message.caption or ""
+
+    mentioned = name_is_mentioned(text)
+
+    if not mentioned:
+        mentioned = await name_is_tagged(
+            update,
+            context,
+        )
+
+    if not mentioned:
         return
+
+    # -----------------------------------------------------
+    # اسم الشخص الذي ذكر المالك
+    # -----------------------------------------------------
+
+    sender = update.effective_user
+
+    if sender:
+        sender_name = (
+            sender.first_name
+            or sender.full_name
+            or "friend"
+        )
+    else:
+        sender_name = "friend"
+
+    # -----------------------------------------------------
+    # ❤️ Reaction
+    # -----------------------------------------------------
 
     try:
         await context.bot.set_message_reaction(
@@ -1006,8 +1130,14 @@ async def name_reaction(update, context):
             flush=True,
         )
 
+    # -----------------------------------------------------
+    # دعاء باسم الشخص الذي ذكر المالك
+    # -----------------------------------------------------
+
+    dua = random.choice(DUAS).strip()
+
     await message.reply_text(
-        random.choice(DUAS)
+        f"🤲 {sender_name}, {dua}"
     )
 
 
@@ -1086,20 +1216,27 @@ The command will be applied to the message you replied to.
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     user = update.effective_user
     chat = update.effective_chat
 
     if not user or not chat:
         return
 
-    if chat.type in ["group", "supergroup"]:
+    if chat.type in [
+        "group",
+        "supergroup",
+    ]:
+
         await update.effective_message.reply_text(
             "👋 Hello! <b>FixMyEnglish Pro</b> is active in this group and ready to help everyone.",
             parse_mode="HTML",
         )
+
         return
 
     if not is_approved(user.id):
+
         add_pending(user.id)
 
         await update.effective_message.reply_text(
@@ -1108,7 +1245,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Please wait for approval."
         )
 
-        await notify_owner(update, user)
+        await notify_owner(
+            update,
+            user,
+        )
+
         return
 
     await update.effective_message.reply_text(
@@ -1129,10 +1270,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1143,13 +1288,18 @@ async def help_command(update, context):
 
 
 async def talk_command(update, context):
+
     user = update.effective_user
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(user.id):
+    if (
+        chat.type == "private"
+        and not is_approved(user.id)
+    ):
         return
 
     if user.id in talk_mode_users:
+
         talk_mode_users.remove(user.id)
 
         await update.effective_message.reply_text(
@@ -1157,6 +1307,7 @@ async def talk_command(update, context):
         )
 
     else:
+
         talk_mode_users.add(user.id)
 
         greetings = [
@@ -1171,19 +1322,29 @@ async def talk_command(update, context):
 
 
 async def vocab_command(update, context):
+
     user = update.effective_user
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(user.id):
+    if (
+        chat.type == "private"
+        and not is_approved(user.id)
+    ):
         return
 
     uid_str = str(user.id)
-    words = vocab_bank.get(uid_str, [])
+
+    words = vocab_bank.get(
+        uid_str,
+        [],
+    )
 
     if not words:
+
         await update.effective_message.reply_text(
             "📭 Your vocabulary bank is empty."
         )
+
         return
 
     text = (
@@ -1210,6 +1371,7 @@ async def notify_owner(update, user):
         return
 
     try:
+
         name = user.full_name or "Unknown"
 
         username = (
@@ -1245,6 +1407,7 @@ async def notify_owner(update, user):
         )
 
     except Exception as e:
+
         print(
             "Notify owner error:",
             repr(e),
@@ -1252,7 +1415,12 @@ async def notify_owner(update, user):
         )
 
 
-async def context_bot_send(update, text, keyboard):
+async def context_bot_send(
+    update,
+    text,
+    keyboard,
+):
+
     await update.get_bot().send_message(
         chat_id=OWNER_ID,
         text=text,
@@ -1262,16 +1430,19 @@ async def context_bot_send(update, text, keyboard):
 
 
 async def access_callback(update, context):
+
     query = update.callback_query
 
     if not query:
         return
 
     if not is_owner(query.from_user.id):
+
         await query.answer(
             "Owner only.",
             show_alert=True,
         )
+
         return
 
     await query.answer()
@@ -1281,7 +1452,10 @@ async def access_callback(update, context):
     if ":" not in data:
         return
 
-    action, user_id_text = data.split(":", 1)
+    action, user_id_text = data.split(
+        ":",
+        1,
+    )
 
     try:
         user_id = int(user_id_text)
@@ -1290,6 +1464,7 @@ async def access_callback(update, context):
         return
 
     if action == "approve":
+
         add_approved(user_id)
         remove_pending(user_id)
 
@@ -1299,12 +1474,14 @@ async def access_callback(update, context):
         )
 
         try:
+
             await context.bot.send_message(
                 chat_id=user_id,
                 text="✅ Your access to FixMyEnglish has been approved!",
             )
 
         except Exception as e:
+
             print(
                 "Approval message error:",
                 repr(e),
@@ -1312,6 +1489,7 @@ async def access_callback(update, context):
             )
 
     elif action == "reject":
+
         remove_pending(user_id)
 
         await query.edit_message_text(
@@ -1320,12 +1498,14 @@ async def access_callback(update, context):
         )
 
         try:
+
             await context.bot.send_message(
                 chat_id=user_id,
                 text="❌ Your access request was not approved.",
             )
 
         except Exception as e:
+
             print(
                 "Reject message error:",
                 repr(e),
@@ -1338,6 +1518,7 @@ async def access_callback(update, context):
 # =========================================================
 
 def extract_user_id(message):
+
     target = get_target_text(message)
 
     if not target:
@@ -1359,7 +1540,10 @@ def extract_user_id(message):
 
 
 async def add_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     user_id = extract_user_id(
@@ -1367,11 +1551,13 @@ async def add_command(update, context):
     )
 
     if user_id is None:
+
         await update.effective_message.reply_text(
             "Usage:\n"
             "/add USER_ID\n\n"
             "Or reply to the user's message with /add"
         )
+
         return
 
     add_approved(user_id)
@@ -1383,7 +1569,10 @@ async def add_command(update, context):
 
 
 async def del_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     user_id = extract_user_id(
@@ -1391,10 +1580,12 @@ async def del_command(update, context):
     )
 
     if user_id is None:
+
         await update.effective_message.reply_text(
             "Usage:\n"
             "/del USER_ID"
         )
+
         return
 
     remove_approved(user_id)
@@ -1405,7 +1596,10 @@ async def del_command(update, context):
 
 
 async def list_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     approved = (
@@ -1435,7 +1629,10 @@ async def list_command(update, context):
 
 
 async def approve_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     user_id = extract_user_id(
@@ -1443,9 +1640,11 @@ async def approve_command(update, context):
     )
 
     if user_id is None:
+
         await update.effective_message.reply_text(
             "Usage: /approve USER_ID"
         )
+
         return
 
     add_approved(user_id)
@@ -1456,12 +1655,14 @@ async def approve_command(update, context):
     )
 
     try:
+
         await context.bot.send_message(
             chat_id=user_id,
             text="✅ Your access has been approved!",
         )
 
     except Exception as e:
+
         print(
             "Approval message error:",
             repr(e),
@@ -1470,7 +1671,10 @@ async def approve_command(update, context):
 
 
 async def reject_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     user_id = extract_user_id(
@@ -1478,9 +1682,11 @@ async def reject_command(update, context):
     )
 
     if user_id is None:
+
         await update.effective_message.reply_text(
             "Usage: /reject USER_ID"
         )
+
         return
 
     remove_pending(user_id)
@@ -1491,7 +1697,10 @@ async def reject_command(update, context):
 
 
 async def stats_command(update, context):
-    if not is_owner(update.effective_user.id):
+
+    if not is_owner(
+        update.effective_user.id
+    ):
         return
 
     await update.effective_message.reply_text(
@@ -1507,10 +1716,14 @@ async def stats_command(update, context):
 # =========================================================
 
 async def tr_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1519,10 +1732,12 @@ async def tr_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /tr text\n\n"
             "Or reply to a message with /tr"
         )
+
         return
 
     await send_long_reply(
@@ -1532,10 +1747,14 @@ async def tr_command(update, context):
 
 
 async def cor_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1544,9 +1763,11 @@ async def cor_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /cor text"
         )
+
         return
 
     await send_long_reply(
@@ -1556,10 +1777,14 @@ async def cor_command(update, context):
 
 
 async def ex_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1568,9 +1793,11 @@ async def ex_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /ex word"
         )
+
         return
 
     save_vocab(
@@ -1585,10 +1812,14 @@ async def ex_command(update, context):
 
 
 async def syn_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1597,9 +1828,11 @@ async def syn_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /syn word"
         )
+
         return
 
     await send_long_reply(
@@ -1609,10 +1842,14 @@ async def syn_command(update, context):
 
 
 async def ant_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1621,9 +1858,11 @@ async def ant_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /ant word"
         )
+
         return
 
     await send_long_reply(
@@ -1633,10 +1872,14 @@ async def ant_command(update, context):
 
 
 async def use_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1645,9 +1888,11 @@ async def use_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /use word"
         )
+
         return
 
     await send_long_reply(
@@ -1657,10 +1902,14 @@ async def use_command(update, context):
 
 
 async def ai_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1669,9 +1918,11 @@ async def ai_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage:\n/ai your request"
         )
+
         return
 
     await send_long_reply(
@@ -1681,10 +1932,14 @@ async def ai_command(update, context):
 
 
 async def us_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1693,9 +1948,11 @@ async def us_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /us word"
         )
+
         return
 
     await send_pronunciation(
@@ -1706,10 +1963,14 @@ async def us_command(update, context):
 
 
 async def uk_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1718,9 +1979,11 @@ async def uk_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /uk word"
         )
+
         return
 
     await send_pronunciation(
@@ -1731,10 +1994,14 @@ async def uk_command(update, context):
 
 
 async def pr_command(update, context):
+
     chat = update.effective_chat
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
@@ -1743,9 +2010,11 @@ async def pr_command(update, context):
     )
 
     if not text:
+
         await update.effective_message.reply_text(
             "Usage: /pr word"
         )
+
         return
 
     await send_pronunciation(
@@ -1774,19 +2043,27 @@ ARABIC_COMMANDS = {
 
 
 async def arabic_command_handler(update, context):
+
     message = update.effective_message
     chat = update.effective_chat
 
     if not message or not message.text:
         return
 
-    if chat.type == "private" and not is_approved(
-        update.effective_user.id
+    if (
+        chat.type == "private"
+        and not is_approved(
+            update.effective_user.id
+        )
     ):
         return
 
     text = message.text.strip()
-    parts = text.split(maxsplit=1)
+
+    parts = text.split(
+        maxsplit=1
+    )
+
     command = parts[0].lower()
 
     if command not in ARABIC_COMMANDS:
@@ -1801,10 +2078,12 @@ async def arabic_command_handler(update, context):
     )
 
     if action == "talk":
+
         await talk_command(
             update,
             context,
         )
+
         return
 
     if not argument:
@@ -1814,18 +2093,21 @@ async def arabic_command_handler(update, context):
         return
 
     if action == "tr":
+
         await send_long_reply(
             update,
             await translate_text(argument),
         )
 
     elif action == "cor":
+
         await send_long_reply(
             update,
             await correct_text(argument),
         )
 
     elif action == "ex":
+
         save_vocab(
             update.effective_user.id,
             argument,
@@ -1837,24 +2119,28 @@ async def arabic_command_handler(update, context):
         )
 
     elif action == "syn":
+
         await send_long_reply(
             update,
             await synonyms_text(argument),
         )
 
     elif action == "ant":
+
         await send_long_reply(
             update,
             await antonyms_text(argument),
         )
 
     elif action == "use":
+
         await send_long_reply(
             update,
             await use_word(argument),
         )
 
     elif action == "us":
+
         await send_pronunciation(
             update,
             argument,
@@ -1862,6 +2148,7 @@ async def arabic_command_handler(update, context):
         )
 
     elif action == "uk":
+
         await send_pronunciation(
             update,
             argument,
@@ -1869,6 +2156,7 @@ async def arabic_command_handler(update, context):
         )
 
     elif action == "pr":
+
         await send_pronunciation(
             update,
             argument,
@@ -1881,6 +2169,7 @@ async def arabic_command_handler(update, context):
 # =========================================================
 
 async def normal_message_handler(update, context):
+
     message = update.effective_message
     chat = update.effective_chat
 
@@ -1888,33 +2177,49 @@ async def normal_message_handler(update, context):
         return
 
     user = update.effective_user
+
+    if not user:
+        return
+
     is_group = chat.type in [
         "group",
         "supergroup",
     ]
 
-    # في الخاص فقط: نتحقق من الاعتماد.
-    # أما في المجموعات فيعمل للجميع
-    if not is_group and not is_approved(user.id):
+    # في الخاص فقط نتحقق من الاعتماد
+    if (
+        not is_group
+        and not is_approved(user.id)
+    ):
         return
 
-    # 1. التفاعل بالقلب والدعاء عند ذكر الاسم
+    # -----------------------------------------------------
+    # 1. الاسم / Tag / Reply
+    # -----------------------------------------------------
+
     await name_reaction(
         update,
         context,
     )
 
     text = message.text.strip()
+
     first_word = text.split(
         maxsplit=1
     )[0].lower()
 
     if first_word in ARABIC_COMMANDS:
+
         await arabic_command_handler(
             update,
             context,
         )
+
         return
+
+    # -----------------------------------------------------
+    # Talk mode
+    # -----------------------------------------------------
 
     is_reply_to_bot = (
         message.reply_to_message
@@ -1924,6 +2229,7 @@ async def normal_message_handler(update, context):
     )
 
     if user.id in talk_mode_users:
+
         if is_group and not is_reply_to_bot:
             return
 
@@ -1933,22 +2239,32 @@ async def normal_message_handler(update, context):
         )
 
         await message.reply_text(reply)
+
         return
 
-    # التصحيح التلقائي في المجموعات لأي عضو:
-    # بين 1 و 20 كلمة بالإنجليزية فقط
+    # -----------------------------------------------------
+    # Auto correction in groups
+    # -----------------------------------------------------
+
     if is_group:
+
         words = text.split()
 
         is_english = (
-            bool(re.search(r'[A-Za-z]', text))
+            bool(
+                re.search(
+                    r"[A-Za-z]",
+                    text,
+                )
+            )
             and not re.search(
-                r'[\u0600-\u06FF]',
+                r"[\u0600-\u06FF]",
                 text,
             )
         )
 
         if is_english and 1 <= len(words) <= 20:
+
             correction = await auto_correct_chat(
                 text
             )
@@ -1956,8 +2272,12 @@ async def normal_message_handler(update, context):
             if (
                 correction
                 and correction.strip().lower()
-                not in {"ok", "ok."}
+                not in {
+                    "ok",
+                    "ok.",
+                }
             ):
+
                 await message.reply_text(
                     f"💡 Correction hint:\n{correction}"
                 )
@@ -1968,6 +2288,7 @@ async def normal_message_handler(update, context):
 # =========================================================
 
 async def error_handler(update, context):
+
     print(
         "Telegram error:",
         repr(context.error),
@@ -1993,6 +2314,7 @@ def health():
 
 
 def run_flask():
+
     port = int(
         os.getenv(
             "PORT",
@@ -2013,7 +2335,9 @@ def run_flask():
 # =========================================================
 
 async def set_command_menu(application):
+
     try:
+
         await application.bot.set_my_commands(
             [
                 ("start", "Start FixMyEnglish"),
@@ -2043,6 +2367,7 @@ async def set_command_menu(application):
         )
 
     except Exception as e:
+
         print(
             "Command menu error:",
             repr(e),
@@ -2051,8 +2376,7 @@ async def set_command_menu(application):
 
 
 async def post_init(application):
-    # إعداد قائمة الأوامر في الخلفية
-    # حتى لا يمنع تشغيل Telegram polling
+
     application.create_task(
         set_command_menu(application)
     )
@@ -2063,9 +2387,18 @@ async def post_init(application):
 # =========================================================
 
 def build_application():
+
     application = (
         Application.builder()
         .token(BOT_TOKEN)
+
+        # Timeouts خاصة بطلبات getUpdates
+        # حتى لا يموت polling بسبب مشاكل الشبكة القصيرة
+        .get_updates_connect_timeout(30)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_pool_timeout(30)
+
         .post_init(post_init)
         .build()
     )
@@ -2235,6 +2568,7 @@ def build_application():
 # =========================================================
 
 def main():
+
     print(
         "=== FixMyEnglish Pro START ===",
         flush=True,
@@ -2262,6 +2596,10 @@ def main():
         flush=True,
     )
 
+    # -----------------------------------------------------
+    # Flask يبدأ مرة واحدة فقط
+    # -----------------------------------------------------
+
     print(
         "Starting Flask...",
         flush=True,
@@ -2279,45 +2617,81 @@ def main():
         flush=True,
     )
 
-    print(
-        "Building Telegram application...",
-        flush=True,
-    )
+    # -----------------------------------------------------
+    # Telegram polling
+    # إذا حدث Bad Gateway / NetworkError
+    # يعيد بناء Application ويبدأ polling من جديد
+    # -----------------------------------------------------
 
-    try:
-        application = build_application()
+    first_run = True
 
-        print(
-            "Telegram application built successfully.",
-            flush=True,
-        )
+    while True:
 
-    except Exception as e:
-        print(
-            "BUILD APPLICATION ERROR:",
-            repr(e),
-            flush=True,
-        )
-        raise
+        application = None
 
-    print(
-        "Starting Telegram polling...",
-        flush=True,
-    )
+        try:
 
-    try:
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-        )
+            print(
+                "Building Telegram application...",
+                flush=True,
+            )
 
-    except Exception as e:
-        print(
-            "POLLING ERROR:",
-            repr(e),
-            flush=True,
-        )
-        raise
+            application = build_application()
+
+            print(
+                "Telegram application built successfully.",
+                flush=True,
+            )
+
+            print(
+                "Starting Telegram polling...",
+                flush=True,
+            )
+
+            application.run_polling(
+                drop_pending_updates=first_run,
+                allowed_updates=Update.ALL_TYPES,
+            )
+
+            first_run = False
+
+            print(
+                "Polling stopped.",
+                flush=True,
+            )
+
+            print(
+                "Restarting polling in 5 seconds...",
+                flush=True,
+            )
+
+            time.sleep(5)
+
+        except KeyboardInterrupt:
+
+            print(
+                "Bot stopped by KeyboardInterrupt.",
+                flush=True,
+            )
+
+            break
+
+        except Exception as e:
+
+            print(
+                "POLLING ERROR:",
+                repr(e),
+                flush=True,
+            )
+
+            print(
+                "Telegram polling will restart in 10 seconds...",
+                flush=True,
+            )
+
+            time.sleep(10)
+
+            first_run = False
 
 
 if __name__ == "__main__":
