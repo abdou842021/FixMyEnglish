@@ -283,12 +283,37 @@ def _ask_groq_sync(prompt, max_tokens=1200, system_prompt=None):
 
 
 async def ask_groq(prompt, max_tokens=1200, system_prompt=None):
-    return await asyncio.to_thread(
-        _ask_groq_sync,
-        prompt,
-        max_tokens,
-        system_prompt,
-    )
+
+    try:
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _ask_groq_sync,
+                prompt,
+                max_tokens,
+                system_prompt,
+            ),
+            timeout=45,
+        )
+
+    except asyncio.TimeoutError:
+
+        print(
+            "Groq TIMEOUT: request took too long.",
+            flush=True,
+        )
+
+        return "❌ AI request timed out. Please try again."
+
+    except Exception as e:
+
+        print(
+            "Groq wrapper error:",
+            repr(e),
+            flush=True,
+        )
+
+        return "❌ AI request failed. Please try again."
 
 
 # =========================================================
@@ -703,9 +728,14 @@ async def make_audio(text, voice):
         communicate = edge_tts.Communicate(
             text=text,
             voice=voice,
+            connect_timeout=10,
+            receive_timeout=20,
         )
 
-        await communicate.save(filename)
+        await asyncio.wait_for(
+            communicate.save(filename),
+            timeout=30,
+        )
 
         if not os.path.exists(filename):
             print(
@@ -729,8 +759,28 @@ async def make_audio(text, voice):
 
         return filename
 
+    except asyncio.TimeoutError:
+
+        print(
+            "TTS TIMEOUT: edge_tts took too long.",
+            flush=True,
+        )
+
+        if filename:
+            try:
+                os.remove(filename)
+            except Exception:
+                pass
+
+        return None
+
     except Exception as e:
-        print("TTS error:", repr(e), flush=True)
+
+        print(
+            "TTS error:",
+            repr(e),
+            flush=True,
+        )
 
         if filename:
             try:
@@ -2391,6 +2441,8 @@ def build_application():
     application = (
         Application.builder()
         .token(BOT_TOKEN)
+
+        .concurrent_updates(4)
 
         # Timeouts خاصة بطلبات getUpdates
         # حتى لا يموت polling بسبب مشاكل الشبكة القصيرة
